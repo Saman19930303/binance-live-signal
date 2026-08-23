@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Signal V2 Validation</title><style>
+*{box-sizing:border-box}body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}.w{max-width:760px;margin:auto;padding:16px}.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:15px;margin:12px 0}h1{font-size:22px}.muted,.l{color:#848e9c}.muted{font-size:13px}.l{font-size:12px;margin-bottom:5px}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f6465d}.live{background:#0ecb81}.price{font-size:31px;font-weight:900}.hero{text-align:center}.sig{display:inline-block;padding:11px 22px;border-radius:99px;font-size:23px;font-weight:900;margin:12px}.wait{background:#f0b90b;color:#111}.buy{background:#0ecb81;color:#03160e}.sell{background:#f6465d;color:#fff}.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.m{background:#111318;border-radius:12px;padding:12px}.v{font-size:17px;font-weight:800}.reason{font-size:13px;line-height:1.7}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:7px 3px;border-bottom:1px solid #2b3139;text-align:left}th{color:#848e9c}.ok{color:#0ecb81}.bad{color:#f6465d}
+</style></head><body><div class="w">
+<h1>Binance Signal V2 • Validation Build</h1><div class="muted"><span id="dot" class="dot"></span> <span id="status">Starting...</span></div>
+<div class="card hero"><div class="l">BTC/USDT LIVE</div><div id="price" class="price">--</div><span id="sig" class="sig wait">WAIT</span><div>Confidence <b id="conf">0%</b></div></div>
+<div class="card"><div class="grid">
+<div class="m"><div class="l">RSI 14</div><div id="rsi" class="v">--</div></div><div class="m"><div class="l">EMA 9 / 21</div><div id="ema" class="v">--</div></div>
+<div class="m"><div class="l">MACD Hist</div><div id="macd" class="v">--</div></div><div class="m"><div class="l">Closed-candle Volume</div><div id="vol" class="v">--</div></div>
+<div class="m"><div class="l">5m Trend</div><div id="trend" class="v">--</div></div><div class="m"><div class="l">Order Book Median</div><div id="book" class="v">Collecting...</div></div></div></div>
+<div class="card"><div class="l">Signal rule</div><div id="why" class="reason">Waiting for verified data...</div></div>
+<div class="card"><div class="l">Closed-Candle Validation Accuracy</div><div id="acc" class="v">No completed tests</div>
+<div class="muted" style="margin:6px 0">Entry = signal minute's closed candle. Result = next minute's closed candle. Equal close = FLAT, not LOSS.</div>
+<div style="overflow:auto"><table><thead><tr><th>Minute</th><th>Signal</th><th>Entry close</th><th>Next close</th><th>Result</th></tr></thead><tbody id="hist"></tbody></table></div></div>
+<div class="card muted">Validation build only. It intentionally rejects low-volume/conflicting setups. No auto-trading and no guaranteed prediction.</div>
+</div><script>
+const $=x=>document.getElementById(x);let k1=[],k5=[],price=0,books=[],lastSignalMinute=null;
+let hist=JSON.parse(localStorage.getItem("v2Validation")||"[]");
+function fmt(n){return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+function ema(v,p){if(v.length<p)return null;let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);for(let i=p;i<v.length;i++)e=v[i]*k+e*(1-k);return e}
+function es(v,p){if(v.length<p)return[];let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1),o=[e];for(let i=p;i<v.length;i++){e=v[i]*k+e*(1-k);o.push(e)}return o}
+function rsi(v,p=14){let g=[],l=[];for(let i=1;i<v.length;i++){let d=v[i]-v[i-1];g.push(Math.max(d,0));l.push(Math.max(-d,0))}let ag=g.slice(0,p).reduce((a,b)=>a+b,0)/p,al=l.slice(0,p).reduce((a,b)=>a+b,0)/p;for(let i=p;i<g.length;i++){ag=(ag*(p-1)+g[i])/p;al=(al*(p-1)+l[i])/p}return al===0?100:100-100/(1+ag/al)}
+function macd(v){let f=es(v,12),s=es(v,26),off=f.length-s.length,line=s.map((x,i)=>f[i+off]-x),sg=ema(line,9);return line.at(-1)-sg}
+async function kl(i){let r=await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=${i}&limit=120`,{cache:"no-store"});if(!r.ok)throw Error("HTTP "+r.status);return r.json()}
+function median(a){let x=[...a].sort((a,b)=>a-b),m=Math.floor(x.length/2);return x.length%2?x[m]:(x[m-1]+x[m])/2}
+async function getBook(){try{let r=await fetch("https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=20",{cache:"no-store"}),d=await r.json(),b=d.bids.reduce((s,x)=>s+(+x[0])*(+x[1]),0),a=d.asks.reduce((s,x)=>s+(+x[0])*(+x[1]),0);books.push(a?b/a:1);if(books.length>15)books.shift()}catch(e){}}
+function renderHist(){let decided=hist.filter(x=>x.result==="WIN"||x.result==="LOSS"),w=decided.filter(x=>x.result==="WIN").length;$("acc").textContent=decided.length?`${Math.round(w/decided.length*100)}% • ${w}/${decided.length} (${hist.filter(x=>x.result==="FLAT").length} flat)`:"No completed tests";$("hist").innerHTML=hist.slice(0,10).map(x=>`<tr><td>${x.minute}</td><td>${x.signal}</td><td>${fmt(x.entry)}</td><td>${fmt(x.next)}</td><td>${x.result}</td></tr>`).join("")}
+function validatePrevious(){
+ if(k1.length<3)return;
+ let closed=k1.slice(0,-1),last=closed.at(-1),prev=closed.at(-2),lastOpen=+last[0],prevOpen=+prev[0];
+ let rec=hist.find(x=>x.openTime===prevOpen && x.next==null);
+ if(rec){rec.next=+last[4];rec.result=rec.next===rec.entry?"FLAT":(rec.signal==="BUY"?(rec.next>rec.entry?"WIN":"LOSS"):(rec.next<rec.entry?"WIN":"LOSS"));localStorage.setItem("v2Validation",JSON.stringify(hist));renderHist()}
+}
+function calc(){
+ let closed1=k1.slice(0,-1),closed5=k5.slice(0,-1);if(closed1.length<50||closed5.length<30)return;
+ let c=closed1.map(x=>+x[4]),v=closed1.map(x=>+x[5]),R=rsi(c),e9=ema(c,9),e21=ema(c,21),M=macd(c),vavg=v.slice(-21,-1).reduce((a,b)=>a+b,0)/20,vr=v.at(-1)/vavg,t=ema(closed5.map(x=>+x[4]),9)>ema(closed5.map(x=>+x[4]),21)?"UP":"DOWN",br=books.length>=7?median(books):1;
+ $("rsi").textContent=R.toFixed(1);$("ema").textContent=fmt(e9)+" / "+fmt(e21);$("macd").textContent=M.toFixed(4);$("vol").textContent=vr.toFixed(2)+"x";$("trend").textContent=t;$("book").textContent=books.length<7?`Collecting ${books.length}/7`:br.toFixed(3);
+ let buy=e9>e21&&M>0&&t==="UP"&&R>=52&&R<=67&&vr>=0.65&&br>=0.90;
+ let sell=e9<e21&&M<0&&t==="DOWN"&&R<=48&&R>=33&&vr>=0.65&&br<=1.11;
+ let sig=buy?"BUY":sell?"SELL":"WAIT",conf=sig==="WAIT"?0:80;
+ $("sig").textContent=sig;$("sig").className="sig "+sig.toLowerCase();$("conf").textContent=conf+"%";
+ $("why").innerHTML=sig==="WAIT"?`WAIT: strict confirmation not complete.<br>Requires volume ≥ 0.65x plus EMA, MACD, RSI, 5m trend and stabilized order-book agreement.`:`${sig}: all strict confirmations currently agree. This is recorded only at a closed 1-minute candle boundary.`;
+ let last=closed1.at(-1),open=+last[0];
+ if(sig!=="WAIT"&&books.length>=7&&lastSignalMinute!==open&&!hist.some(x=>x.openTime===open)){lastSignalMinute=open;hist.unshift({openTime:open,minute:new Date(open).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}),signal:sig,entry:+last[4],next:null,result:"PENDING"});hist=hist.slice(0,40);localStorage.setItem("v2Validation",JSON.stringify(hist));renderHist()}
+}
+async function refresh(){try{[k1,k5]=await Promise.all([kl("1m"),kl("5m")]);validatePrevious();calc()}catch(e){$("status").textContent=e.message}}
+async function start(){await refresh();for(let i=0;i<7;i++){await getBook();await new Promise(r=>setTimeout(r,350))}calc();let ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");ws.onmessage=e=>{price=+JSON.parse(e.data).p;$("price").textContent="$"+fmt(price);$("dot").classList.add("live");$("status").textContent="LIVE • Binance"};setInterval(getBook,2000);setInterval(refresh,3000);renderHist()}
+start();
+</script></body></html>
