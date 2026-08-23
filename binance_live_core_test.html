@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Live Core Test</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}
+.w{max-width:720px;margin:auto;padding:18px}.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:16px;margin:12px 0}
+h1{font-size:23px;margin:8px 0}.status{font-size:14px;color:#848e9c}.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f6465d}.live{background:#0ecb81}
+.price{font-size:36px;font-weight:900;margin:8px 0}.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m{background:#111318;border-radius:12px;padding:12px}.l{font-size:12px;color:#848e9c;margin-bottom:6px}.v{font-weight:800;font-size:17px}
+.ok{color:#0ecb81}.bad{color:#f6465d}button{width:100%;padding:13px;border:0;border-radius:12px;background:#f0b90b;font-weight:900;font-size:16px}
+</style></head>
+<body><div class="w">
+<h1>Binance Live Core Test</h1>
+<div class="status"><span id="dot" class="dot"></span> <span id="status">Starting...</span></div>
+<div class="card"><div class="l">BTC/USDT LIVE PRICE</div><div id="price" class="price">--</div><div id="tradeStatus" class="status">Waiting for live trade...</div></div>
+<div class="card"><div class="grid">
+<div class="m"><div class="l">1m Candles Loaded</div><div id="c1" class="v">--</div></div>
+<div class="m"><div class="l">5m Candles Loaded</div><div id="c5" class="v">--</div></div>
+<div class="m"><div class="l">Latest 1m Close</div><div id="close1" class="v">--</div></div>
+<div class="m"><div class="l">Next Minute</div><div id="count" class="v">--</div></div>
+</div></div>
+<div class="card"><div class="l">Connection Log</div><div id="log" class="status"></div></div>
+<button onclick="location.reload()">Restart Test</button>
+</div>
+<script>
+const $=x=>document.getElementById(x);
+function log(s,ok=true){$("log").innerHTML += `<div class="${ok?'ok':'bad'}">${new Date().toLocaleTimeString()} • ${s}</div>`}
+function fmt(n){return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:8})}
+async function loadKlines(interval){
+ const u=`https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=120`;
+ const r=await fetch(u,{cache:"no-store"}); if(!r.ok)throw new Error(`Klines ${interval}: HTTP ${r.status}`);
+ const d=await r.json(); if(!Array.isArray(d))throw new Error(`Klines ${interval}: bad response`);
+ return d;
+}
+async function start(){
+ $("status").textContent="Testing REST candles...";
+ try{
+   const [a,b]=await Promise.all([loadKlines("1m"),loadKlines("5m")]);
+   $("c1").textContent=a.length+" ✓"; $("c5").textContent=b.length+" ✓";
+   $("close1").textContent="$"+fmt(+a.at(-1)[4]);
+   log("REST 1m candles PASS"); log("REST 5m candles PASS");
+ }catch(e){log(e.message,false)}
+ $("status").textContent="Connecting WebSocket...";
+ const ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+ let timer=setTimeout(()=>{log("WebSocket timeout",false)},10000);
+ ws.onopen=()=>log("WebSocket opened");
+ ws.onmessage=e=>{
+   clearTimeout(timer);
+   const d=JSON.parse(e.data);
+   $("price").textContent="$"+fmt(+d.p);
+   $("tradeStatus").textContent="Live trade received ✓";
+   $("dot").classList.add("live"); $("status").textContent="LIVE • Binance";
+ };
+ ws.onerror=()=>{log("WebSocket error",false);$("status").textContent="WebSocket failed"};
+ ws.onclose=e=>log("WebSocket closed: "+e.code,false);
+}
+setInterval(()=>{$("count").textContent="00:"+String(Math.max(0,Math.floor((60000-Date.now()%60000)/1000))).padStart(2,"0")},250);
+start();
+</script></body></html>
