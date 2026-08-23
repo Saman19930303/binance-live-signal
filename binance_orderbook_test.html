@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Order Book Test</title><style>
+*{box-sizing:border-box}body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}.w{max-width:700px;margin:auto;padding:18px}
+.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:16px;margin:12px 0}h1{font-size:23px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f6465d}.live{background:#0ecb81}.muted{color:#848e9c;font-size:13px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.m{background:#111318;border-radius:12px;padding:14px}.l{color:#848e9c;font-size:12px;margin-bottom:6px}.v{font-size:20px;font-weight:900}
+.bar{height:18px;background:#2b3139;border-radius:99px;overflow:hidden;display:flex}.buy{background:#0ecb81;height:100%}.sell{background:#f6465d;height:100%}
+.ok{color:#0ecb81}.bad{color:#f6465d}
+</style></head><body><div class="w"><h1>Binance Live Order Book Test</h1>
+<div class="muted"><span id="dot" class="dot"></span> <span id="status">Starting...</span></div>
+<div class="card"><div class="grid">
+<div class="m"><div class="l">BUY Pressure</div><div id="bp" class="v">--</div></div>
+<div class="m"><div class="l">SELL Pressure</div><div id="sp" class="v">--</div></div>
+<div class="m"><div class="l">Bid / Ask Ratio</div><div id="ratio" class="v">--</div></div>
+<div class="m"><div class="l">Top Levels</div><div id="levels" class="v">--</div></div>
+</div><div class="bar" style="margin-top:15px"><div id="bb" class="buy" style="width:50%"></div><div id="sb" class="sell" style="width:50%"></div></div></div>
+<div class="card"><div class="l">Interpretation</div><div id="interp" class="v">Waiting...</div><div id="log" class="muted" style="margin-top:8px"></div></div>
+</div><script>
+const $=x=>document.getElementById(x);
+async function update(){
+ try{
+  let r=await fetch("https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=20",{cache:"no-store"});
+  if(!r.ok)throw Error("HTTP "+r.status);let d=await r.json();
+  let bid=d.bids.reduce((s,x)=>s+(+x[0])*(+x[1]),0),ask=d.asks.reduce((s,x)=>s+(+x[0])*(+x[1]),0),tot=bid+ask;
+  let bp=tot?bid/tot*100:50,sp=100-bp,ratio=ask?bid/ask:0;
+  $("bp").textContent=bp.toFixed(1)+"%";$("sp").textContent=sp.toFixed(1)+"%";$("ratio").textContent=ratio.toFixed(3);$("levels").textContent=d.bids.length+" / "+d.asks.length;
+  $("bb").style.width=bp+"%";$("sb").style.width=sp+"%";
+  let text=ratio>1.15?"BUYERS STRONGER ↑":ratio<0.87?"SELLERS STRONGER ↓":"BALANCED";
+  $("interp").textContent=text;$("log").innerHTML='<span class="ok">Order book loaded from Binance market-data endpoint ✓</span>';
+  $("dot").classList.add("live");$("status").textContent="LIVE • updating every 2 seconds";
+ }catch(e){$("log").innerHTML='<span class="bad">'+e.message+'</span>';$("status").textContent="Failed"}
+}
+update();setInterval(update,2000);
+</script></body></html>
