@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Live Signal V2</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}
+.wrap{max-width:820px;margin:auto;padding:16px}.top{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px}
+h1{font-size:21px;margin:0}select{background:#181a20;color:#fff;border:1px solid #2b3139;padding:10px;border-radius:10px}
+.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:15px;margin-bottom:12px}
+.hero{text-align:center}.price{font-size:32px;font-weight:800;margin:7px}.muted,.label{color:#848e9c}.label{font-size:12px;margin-bottom:5px}
+.signal{display:inline-block;padding:10px 22px;border-radius:999px;font-size:22px;font-weight:900;background:#2b3139}
+.strong-buy,.buy{background:#0ecb81;color:#061a12}.strong-sell,.sell{background:#f6465d;color:#fff}.wait{background:#f0b90b;color:#111}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}.metric{background:#111318;border-radius:12px;padding:12px}.value{font-size:17px;font-weight:700}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:#f6465d}.live{background:#0ecb81}
+.status{font-size:13px;color:#848e9c}.bar{height:10px;background:#2b3139;border-radius:10px;overflow:hidden;margin-top:8px}.fill{height:100%;width:50%;background:#848e9c}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:8px 4px;border-bottom:1px solid #2b3139;text-align:left}th{color:#848e9c}
+.note{font-size:12px;line-height:1.5;color:#848e9c}
+@media(max-width:520px){.price{font-size:27px}.grid{grid-template-columns:1fr 1fr}.top{align-items:flex-start}}
+</style>
+</head>
+<body><div class="wrap">
+<div class="top"><div><h1>Binance Live Signal V2</h1><div class="status"><span id="dot" class="dot"></span> <span id="status">Connecting...</span></div></div>
+<select id="symbol"><option>BTCUSDT</option><option>ETHUSDT</option><option>BNBUSDT</option><option>SOLUSDT</option><option>XRPUSDT</option></select></div>
+
+<div class="card hero"><div id="pair" class="muted">BTC/USDT</div><div id="price" class="price">Loading...</div>
+<div id="signal" class="signal wait">WAIT</div><div style="margin-top:10px">Confidence: <b id="conf">0%</b></div>
+<div class="bar"><div id="confbar" class="fill"></div></div></div>
+
+<div class="card"><div class="grid">
+<div class="metric"><div class="label">1m RSI</div><div id="rsi" class="value">--</div></div>
+<div class="metric"><div class="label">EMA 9 / 21</div><div id="ema" class="value">--</div></div>
+<div class="metric"><div class="label">MACD Hist</div><div id="macd" class="value">--</div></div>
+<div class="metric"><div class="label">Volume vs Avg</div><div id="vol" class="value">--</div></div>
+<div class="metric"><div class="label">Order Book Pressure</div><div id="book" class="value">--</div></div>
+<div class="metric"><div class="label">5m Trend</div><div id="trend5" class="value">--</div></div>
+<div class="metric"><div class="label">1m Momentum</div><div id="mom" class="value">--</div></div>
+<div class="metric"><div class="label">Next Candle</div><div id="countdown" class="value">--</div></div>
+</div></div>
+
+<div class="card"><div class="grid">
+<div class="metric"><div class="label">Entry</div><div id="entry" class="value">--</div></div>
+<div class="metric"><div class="label">Take Profit*</div><div id="tp" class="value">--</div></div>
+<div class="metric"><div class="label">Stop Loss*</div><div id="sl" class="value">--</div></div>
+<div class="metric"><div class="label">Tracked Accuracy</div><div id="accuracy" class="value">--</div></div>
+</div></div>
+
+<div class="card"><b>1-Minute Signal History</b><div style="overflow:auto;margin-top:8px"><table>
+<thead><tr><th>Time</th><th>Signal</th><th>Entry</th><th>1m Price</th><th>Result</th></tr></thead><tbody id="history"></tbody>
+</table></div></div>
+
+<div class="card note">V2 uses Binance public market data only; no API key is needed. Order-book pressure uses the top depth levels. Signals are heuristic estimates and can be wrong. *TP/SL are illustrative risk levels, not guaranteed outcomes.</div>
+</div>
+<script>
+const $=x=>document.getElementById(x); let sym="BTCUSDT", c1=[], c5=[], ws=null, price=null, bookRatio=1;
+let pending=[], results=JSON.parse(localStorage.getItem("v2results")||"[]"), lastSignalMinute=null;
+function fmt(n){if(!isFinite(n))return"--";return n>=1000?n.toLocaleString(undefined,{maximumFractionDigits:2}):n>=1?n.toFixed(2):n.toFixed(5)}
+function ema(v,p){if(v.length<p)return null;let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);for(let i=p;i<v.length;i++)e=v[i]*k+e*(1-k);return e}
+function es(v,p){if(v.length<p)return[];let o=[],e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);o.push(e);for(let i=p;i<v.length;i++){e=v[i]*k+e*(1-k);o.push(e)}return o}
+function rsi(v,p=14){if(v.length<=p)return null;let g=0,l=0;for(let i=v.length-p;i<v.length;i++){let d=v[i]-v[i-1];d>=0?g+=d:l-=d}if(l===0)return 100;let rs=(g/p)/(l/p);return 100-100/(1+rs)}
+function macd(v){let a=es(v,12),b=es(v,26);if(!a.length||!b.length)return null;let off=a.length-b.length,line=b.map((x,i)=>a[i+off]-x),sg=ema(line,9);return sg==null?null:line.at(-1)-sg}
+async function hist(interval,limit=120){let r=await fetch(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${limit}`),d=await r.json();return d.map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]}))}
+async function depth(){try{let r=await fetch(`https://api.binance.com/api/v3/depth?symbol=${sym}&limit=20`),d=await r.json();let b=d.bids.reduce((s,x)=>s+(+x[0])*(+x[1]),0),a=d.asks.reduce((s,x)=>s+(+x[0])*(+x[1]),0);bookRatio=a?b/a:1;analyze()}catch(e){}}
+function trend5(){let v=c5.map(x=>x.c),a=ema(v,9),b=ema(v,21);if(a==null||b==null)return"WAIT";return a>b?"UP":"DOWN"}
+function analyze(){
+ if(c1.length<40||!price)return;
+ let v=c1.map(x=>x.c),vols=c1.map(x=>x.v),e9=ema(v,9),e21=ema(v,21),rv=rsi(v),mh=macd(v);
+ let av=vols.slice(-20,-1).reduce((a,b)=>a+b,0)/19,vr=av?vols.at(-1)/av:1,mo=(v.at(-1)-v.at(-2))/v.at(-2)*100,t5=trend5();
+ let B=0,S=0;
+ e9>e21?B+=20:S+=20; rv>=52&&rv<=68?B+=15:0; rv<=48&&rv>=32?S+=15:0;
+ if(mh!=null)(mh>0?B:S)+=20; mo>0.02?B+=10:mo<-0.02?S+=10:0;
+ if(vr>1.15)(mo>0?B:S)+=10;
+ if(bookRatio>1.12)B+=15; if(bookRatio<0.89)S+=15;
+ if(t5==="UP")B+=20; if(t5==="DOWN")S+=20;
+ let sig="WAIT",mx=Math.max(B,S);
+ if(B>=80&&B>=S+20)sig="STRONG BUY"; else if(B>=65&&B>=S+15)sig="BUY";
+ else if(S>=80&&S>=B+20)sig="STRONG SELL"; else if(S>=65&&S>=B+15)sig="SELL";
+ let cf=Math.min(95,Math.round(mx));
+ $("rsi").textContent=rv.toFixed(1);$("ema").textContent=`${fmt(e9)} / ${fmt(e21)}`;$("macd").textContent=mh==null?"--":mh.toFixed(4);
+ $("vol").textContent=vr.toFixed(2)+"x";$("book").textContent=bookRatio.toFixed(2)+" "+(bookRatio>1.05?"BUY":bookRatio<.95?"SELL":"BAL");
+ $("trend5").textContent=t5;$("mom").textContent=(mo>=0?"+":"")+mo.toFixed(3)+"%";$("conf").textContent=cf+"%";$("confbar").style.width=cf+"%";
+ let el=$("signal");el.textContent=sig;el.className="signal "+sig.toLowerCase().replace(" ","-");
+ $("entry").textContent=fmt(price);
+ if(sig.includes("BUY")){$("tp").textContent=fmt(price*1.003);$("sl").textContent=fmt(price*.998)}
+ else if(sig.includes("SELL")){$("tp").textContent=fmt(price*.997);$("sl").textContent=fmt(price*1.002)}else{$("tp").textContent=$("sl").textContent="--"}
+ track(sig,cf);
+}
+function track(sig,cf){
+ let minute=Math.floor(Date.now()/60000);
+ if(sig==="WAIT"||cf<65||lastSignalMinute===minute)return;
+ lastSignalMinute=minute; pending.push({due:Date.now()+60000,time:new Date().toLocaleTimeString(),sig,entry:price});
+}
+function settle(){
+ let now=Date.now(),keep=[];
+ pending.forEach(x=>{if(now>=x.due&&price){let buy=x.sig.includes("BUY"),win=buy?price>x.entry:price<x.entry;
+ results.unshift({...x,end:price,result:win?"WIN":"LOSS"});results=results.slice(0,30);localStorage.setItem("v2results",JSON.stringify(results));}else keep.push(x)});
+ pending=keep; render();
+}
+function render(){
+ let w=results.filter(x=>x.result==="WIN").length;$("accuracy").textContent=results.length?`${Math.round(w/results.length*100)}% (${w}/${results.length})`:"No results";
+ $("history").innerHTML=results.slice(0,10).map(x=>`<tr><td>${x.time}</td><td>${x.sig}</td><td>${fmt(x.entry)}</td><td>${fmt(x.end)}</td><td>${x.result}</td></tr>`).join("");
+}
+function connect(){
+ if(ws)try{ws.close()}catch(e){}
+ ws=new WebSocket(`wss://stream.binance.com:9443/stream?streams=${sym.toLowerCase()}@kline_1m/${sym.toLowerCase()}@kline_5m`);
+ ws.onopen=()=>{$("dot").classList.add("live");$("status").textContent="LIVE • Binance"};
+ ws.onmessage=e=>{let z=JSON.parse(e.data),k=z.data.k,arr=z.stream.endsWith("1m")?c1:c5,o={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,v:+k.v};
+ let i=arr.findIndex(x=>x.t===o.t);i>=0?arr[i]=o:arr.push(o);if(arr.length>150)arr.shift();if(z.stream.endsWith("1m")){price=o.c;$("price").textContent="$"+fmt(price)} analyze()};
+ ws.onclose=()=>{$("dot").classList.remove("live");$("status").textContent="Reconnecting...";setTimeout(connect,2000)};
+}
+async function start(){try{$("status").textContent="Loading market data...";[c1,c5]=await Promise.all([hist("1m"),hist("5m")]);price=c1.at(-1).c;$("price").textContent="$"+fmt(price);await depth();connect();render()}catch(e){$("status").textContent="Connection failed"}}
+$("symbol").onchange=e=>{sym=e.target.value;$("pair").textContent=sym.replace("USDT","/USDT");c1=[];c5=[];pending=[];lastSignalMinute=null;start()};
+setInterval(depth,3000);setInterval(settle,1000);setInterval(()=>{$("countdown").textContent="00:"+String(Math.floor((60000-Date.now()%60000)/1000)).padStart(2,"0")},250);
+start();
+</script></body></html>
