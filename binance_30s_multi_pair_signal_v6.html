@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance 30s Multi-Pair Signal V6</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,Helvetica,sans-serif}
+.wrap{max-width:820px;margin:auto;padding:16px}
+h1{font-size:22px;margin:4px 0 6px}
+.muted,.label{color:#848e9c}.muted{font-size:13px}.label{font-size:12px;margin-bottom:5px}
+.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:15px;margin:12px 0}
+.hero{text-align:center}.price{font-size:32px;font-weight:900;margin:8px 0}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f6465d}.dot.live{background:#0ecb81}
+.signal{display:inline-block;padding:12px 24px;border-radius:999px;font-size:24px;font-weight:900;margin:10px 0}
+.wait{background:#f0b90b;color:#111}.buy,.strong-buy{background:#0ecb81;color:#05150e}.sell,.strong-sell{background:#f6465d;color:#fff}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:9px}.metric{background:#111318;border-radius:12px;padding:12px}.value{font-weight:800;font-size:17px}
+.bar{height:10px;background:#2b3139;border-radius:99px;overflow:hidden;margin-top:9px}.fill{height:100%;background:#848e9c}
+.reason{font-size:13px;line-height:1.7}
+.good{color:#0ecb81}.bad{color:#f6465d}.warn{color:#f0b90b}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:7px 3px;border-bottom:1px solid #2b3139;text-align:left}th{color:#848e9c}
+@media(max-width:520px){.grid{grid-template-columns:1fr 1fr}.price{font-size:28px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Binance 30s Multi-Pair Signal V6</h1>
+  <div class="muted"><span id="dot" class="dot"></span> <span id="status">Starting...</span></div>
+  <div class="card" style="padding:12px">
+    <div class="grid">
+      <div class="metric">
+        <div class="label">Trading Pair</div>
+        <select id="pairSelect" style="width:100%;background:#0f1217;color:#eaecef;border:1px solid #2b3139;border-radius:10px;padding:11px;font-size:16px">
+          <option value="BTCUSDT">BTC/USDT</option>
+          <option value="ETHUSDT">ETH/USDT</option>
+          <option value="BNBUSDT">BNB/USDT</option>
+          <option value="SOLUSDT">SOL/USDT</option>
+          <option value="XRPUSDT">XRP/USDT</option>
+          <option value="ADAUSDT">ADA/USDT</option>
+          <option value="DOGEUSDT">DOGE/USDT</option>
+          <option value="AVAXUSDT">AVAX/USDT</option>
+          <option value="LINKUSDT">LINK/USDT</option>
+          <option value="TRXUSDT">TRX/USDT</option>
+        </select>
+      </div>
+      <div class="metric">
+        <div class="label">Signal Alert</div>
+        <button id="notifyBtn" type="button" style="width:100%;background:#f0b90b;color:#111;border:0;border-radius:10px;padding:11px;font-weight:800;font-size:15px">Enable Notifications</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card hero">
+    <div id="pairLabel" class="label">BTC/USDT LIVE</div>
+    <div id="price" class="price">--</div>
+    <div><span id="signal" class="signal wait">WAIT</span></div>
+    <div>Confidence <b id="confidence">0%</b></div>
+    <div class="bar"><div id="confbar" class="fill" style="width:0%"></div></div>
+    <div class="muted" style="margin-top:10px">Signal valid for <b id="valid">--</b></div>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div class="metric"><div class="label">15s Trade Flow</div><div id="flow" class="value">--</div></div>
+      <div class="metric"><div class="label">Order Book Imbalance</div><div id="obi" class="value">--</div></div>
+      <div class="metric"><div class="label">Microprice Bias</div><div id="micro" class="value">--</div></div>
+      <div class="metric"><div class="label">Spread</div><div id="spread" class="value">--</div></div>
+      <div class="metric"><div class="label">15s Momentum</div><div id="mom15" class="value">--</div></div>
+      <div class="metric"><div class="label">60s Momentum</div><div id="mom60" class="value">--</div></div>
+      <div class="metric"><div class="label">RSI 14</div><div id="rsi" class="value">--</div></div>
+      <div class="metric"><div class="label">EMA 9 / 21</div><div id="ema" class="value">--</div></div>
+      <div class="metric"><div class="label">MACD Hist</div><div id="macd" class="value">--</div></div>
+      <div class="metric"><div class="label">5m Trend</div><div id="trend5" class="value">--</div></div>
+      <div class="metric"><div class="label">Closed 1m Volume</div><div id="vol" class="value">--</div></div>
+      <div class="metric"><div class="label">Market State</div><div id="state" class="value">--</div></div>
+    </div>
+  </div>
+
+  <div class="card" id="tradeCard" style="display:none">
+    <div class="grid">
+      <div class="metric"><div class="label">Locked Entry Price</div><div id="entry" class="value">--</div></div>
+      <div class="metric"><div class="label">30s Target Check</div><div id="targettime" class="value">--</div></div>
+      <div class="metric"><div class="label">Illustrative TP</div><div id="tp" class="value">--</div></div>
+      <div class="metric"><div class="label">Illustrative SL</div><div id="sl" class="value">--</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="label">Signal Decision</div>
+    <div id="why" class="reason">Collecting live microstructure data...</div>
+  </div>
+
+  <div class="card">
+    <div class="label">30-Second Validation Accuracy</div>
+    <div id="accuracy" class="value">No completed signals</div>
+    <div class="grid" style="margin:10px 0 12px">
+      <div class="metric"><div class="label">Last 10</div><div id="acc10" class="value">--</div></div>
+      <div class="metric"><div class="label">Last 25</div><div id="acc25" class="value">--</div></div>
+      <div class="metric"><div class="label">Last 50</div><div id="acc50" class="value">--</div></div>
+    </div>
+    <div class="muted" style="margin:6px 0">Only confirmed BUY/SELL setups are recorded. Entry is locked at confirmation and checked against the live Binance price exactly 30 seconds later. Every completed confirmed signal is classified only as WIN or LOSS.</div>
+    <div style="overflow:auto">
+      <table>
+        <thead><tr><th>Time</th><th>Signal</th><th>Entry</th><th>After 30s</th><th>Move</th><th>Result</th></tr></thead>
+        <tbody id="history"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card muted">
+    V6 Binance realtime validation build. WAIT never creates an entry. Confirmed signals lock once for 30 seconds; history records only completed confirmed tests. Live inputs come directly from Binance public market-data streams/endpoints. Predictive accuracy is measured from completed signals; it is not guaranteed.
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+let SYMBOL="BTCUSDT";
+let k1=[],k5=[],price=0,bestBid=0,bestAsk=0,bidQty=0,askQty=0;
+let trades=[], priceTicks=[], bookSamples=[], pending=[];
+let lastSignalAt=0, activeUntil=0, activeSignal="WAIT", ws=null, notifyEnabled=false;
+let results=JSON.parse(localStorage.getItem("precision30V6Results")||"[]");
+
+function fmt(n,d=2){
+  if(!Number.isFinite(+n)) return "--";
+  return (+n).toLocaleString(undefined,{minimumFractionDigits:d,maximumFractionDigits:d});
+}
+function ema(v,p){
+  if(v.length<p) return null;
+  let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);
+  for(let i=p;i<v.length;i++) e=v[i]*k+e*(1-k);
+  return e;
+}
+function emaSeries(v,p){
+  if(v.length<p) return [];
+  let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1),o=[e];
+  for(let i=p;i<v.length;i++){e=v[i]*k+e*(1-k);o.push(e)}
+  return o;
+}
+function rsi(v,p=14){
+  if(v.length<=p)return null;
+  let gains=[],losses=[];
+  for(let i=1;i<v.length;i++){let d=v[i]-v[i-1];gains.push(Math.max(d,0));losses.push(Math.max(-d,0))}
+  let ag=gains.slice(0,p).reduce((a,b)=>a+b,0)/p,al=losses.slice(0,p).reduce((a,b)=>a+b,0)/p;
+  for(let i=p;i<gains.length;i++){ag=(ag*(p-1)+gains[i])/p;al=(al*(p-1)+losses[i])/p}
+  if(al===0)return 100;
+  return 100-(100/(1+ag/al));
+}
+function macd(v){
+  let f=emaSeries(v,12),s=emaSeries(v,26);
+  if(!s.length)return null;
+  let off=f.length-s.length,line=s.map((x,i)=>f[i+off]-x),sig=ema(line,9);
+  return sig==null?null:line.at(-1)-sig;
+}
+function median(a){
+  if(!a.length)return null;
+  let x=[...a].sort((a,b)=>a-b),m=Math.floor(x.length/2);
+  return x.length%2?x[m]:(x[m-1]+x[m])/2;
+}
+async function klines(interval){
+  let r=await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${SYMBOL}&interval=${interval}&limit=160`,{cache:"no-store"});
+  if(!r.ok)throw new Error("Kline HTTP "+r.status);
+  return r.json();
+}
+async function refreshCandles(){
+  try{
+    [k1,k5]=await Promise.all([klines("1m"),klines("5m")]);
+  }catch(e){$("status").textContent="Candle error"}
+}
+async function refreshDepth(){
+  try{
+    let r=await fetch(`https://data-api.binance.vision/api/v3/depth?symbol=${SYMBOL}&limit=20`,{cache:"no-store"});
+    let d=await r.json();
+    let bidNotional=d.bids.reduce((s,x)=>s+(+x[0])*(+x[1]),0);
+    let askNotional=d.asks.reduce((s,x)=>s+(+x[0])*(+x[1]),0);
+    let obi=(bidNotional-askNotional)/(bidNotional+askNotional||1);
+    bookSamples.push({t:Date.now(),obi});
+    bookSamples=bookSamples.filter(x=>Date.now()-x.t<=20000);
+  }catch(e){}
+}
+function rollingPrice(ms){
+  let cutoff=Date.now()-ms, arr=priceTicks.filter(x=>x.t>=cutoff);
+  return arr.length?arr[0].p:null;
+}
+function calcFlow(ms=30000){
+  let cutoff=Date.now()-ms,b=0,s=0;
+  for(const x of trades){
+    if(x.t<cutoff)continue;
+    if(x.side==="BUY")b+=x.notional; else s+=x.notional;
+  }
+  let tot=b+s;
+  return tot? (b-s)/tot : 0;
+}
+function microBias(){
+  if(!bestBid||!bestAsk||!bidQty||!askQty)return 0;
+  let mid=(bestBid+bestAsk)/2;
+  let micro=(bestAsk*bidQty+bestBid*askQty)/(bidQty+askQty);
+  return mid? (micro-mid)/mid*10000 : 0; // basis points
+}
+function bookMedian(){
+  let vals=bookSamples.filter(x=>Date.now()-x.t<=15000).map(x=>x.obi);
+  return vals.length?median(vals):0;
+}
+function marketState(vr,spreadBps){
+  if(spreadBps>2.5)return "WIDE SPREAD";
+  if(vr<0.35)return "LOW VOLUME";
+  if(vr>2.5)return "VOLATILE";
+  return "NORMAL";
+}
+function accuracyText(n){
+  const a=results.slice(0,n);
+  if(!a.length)return "--";
+  const decided=a.filter(x=>x.result==="WIN"||x.result==="LOSS");
+  const wins=decided.filter(x=>x.result==="WIN").length;
+  return a.length ? `${Math.round(wins/a.length*100)}% • ${wins}/${a.length}` : "No completed signals";
+}
+function renderHistory(){
+  let decided=results.filter(x=>x.result==="WIN"||x.result==="LOSS");
+  let w=decided.filter(x=>x.result==="WIN").length;
+  $("accuracy").textContent=results.length?`${Math.round(w/results.length*100)}% • ${w}/${results.length}`:"No completed signals";
+  $("acc10").textContent=accuracyText(10);
+  $("acc25").textContent=accuracyText(25);
+  $("acc50").textContent=accuracyText(50);
+  $("history").innerHTML=results.slice(0,12).map(x=>`<tr><td>${x.time}</td><td>${x.signal}</td><td>${fmt(x.entry)}</td><td>${fmt(x.end)}</td><td>${x.move.toFixed(3)}%</td><td>${x.result}</td></tr>`).join("");
+}
+function settle(){
+  let keep=[];
+  for(const x of pending){
+    if(Date.now()>=x.due && price){
+      let move=(price-x.entry)/x.entry*100;
+      // Ignore microscopic noise around the entry. 1 bp = 0.01%.
+      const flatThreshold=0.01;
+      let result;
+      if(Math.abs(move)<flatThreshold) result="FLAT";
+      else {
+        let win=x.signal.includes("BUY")?move>0:move<0;
+        result=win?"WIN":"LOSS";
+      }
+      results.unshift({...x,end:price,move,result});
+      results=results.slice(0,50);
+      localStorage.setItem("precision30V6Results",JSON.stringify(results));
+      activeUntil=0;
+      activeSignal="WAIT";
+      $("tradeCard").style.display="none";
+      $("valid").textContent="waiting";
+    }else keep.push(x);
+  }
+  pending=keep;
+  renderHistory();
+}
+function evaluate(){
+  if(k1.length<60||k5.length<40||!price||priceTicks.length<20)return;
+
+  let c1=k1.slice(0,-1).map(x=>+x[4]);
+  let v1=k1.slice(0,-1).map(x=>+x[5]);
+  let c5=k5.slice(0,-1).map(x=>+x[4]);
+
+  let R=rsi(c1),E9=ema(c1,9),E21=ema(c1,21),M=macd(c1);
+  let avgVol=v1.slice(-21,-1).reduce((a,b)=>a+b,0)/20;
+  let VR=avgVol?v1.at(-1)/avgVol:1;
+  let T5=ema(c5,9)>ema(c5,21)?"UP":"DOWN";
+  let flow=calcFlow(15000);
+  let obi=bookMedian();
+  let micro=microBias();
+  let spreadBps=(bestAsk&&bestBid)?(bestAsk-bestBid)/((bestAsk+bestBid)/2)*10000:0;
+  let p15=rollingPrice(15000),p60=rollingPrice(60000);
+  let m15=p15?(price-p15)/p15*100:0,m60=p60?(price-p60)/p60*100:0;
+  let state=marketState(VR,spreadBps);
+
+  $("flow").textContent=(flow>=0?"+":"")+(flow*100).toFixed(1)+"%";
+  $("obi").textContent=(obi>=0?"+":"")+(obi*100).toFixed(1)+"%";
+  $("micro").textContent=(micro>=0?"+":"")+micro.toFixed(3)+" bps";
+  $("spread").textContent=spreadBps.toFixed(3)+" bps";
+  $("mom15").textContent=(m15>=0?"+":"")+m15.toFixed(3)+"%";
+  $("mom60").textContent=(m60>=0?"+":"")+m60.toFixed(3)+"%";
+  $("rsi").textContent=R.toFixed(1);
+  $("ema").textContent=fmt(E9)+" / "+fmt(E21);
+  $("macd").textContent=M.toFixed(4);
+  $("trend5").textContent=T5;
+  $("vol").textContent=VR.toFixed(2)+"x";
+  $("state").textContent=state;
+
+  let buy=0,sell=0,rb=[],rs=[];
+
+  if(flow>0.12){buy+=22;rb.push("15s taker flow bullish")} else if(flow<-0.12){sell+=22;rs.push("15s taker flow bearish")}
+  if(obi>0.08){buy+=16;rb.push("book imbalance bullish")} else if(obi<-0.08){sell+=16;rs.push("book imbalance bearish")}
+  if(micro>0.08){buy+=14;rb.push("microprice above mid")} else if(micro<-0.08){sell+=14;rs.push("microprice below mid")}
+  if(m15>0.015){buy+=12;rb.push("15s momentum up")} else if(m15<-0.015){sell+=12;rs.push("15s momentum down")}
+  if(m60>0.02){buy+=6;rb.push("60s momentum up")} else if(m60<-0.02){sell+=6;rs.push("60s momentum down")}
+  if(E9>E21){buy+=6;rb.push("EMA trend up")} else {sell+=6;rs.push("EMA trend down")}
+  if(M>0){buy+=6;rb.push("MACD positive")} else {sell+=6;rs.push("MACD negative")}
+  if(T5==="UP"){buy+=4;rb.push("5m trend up")} else {sell+=4;rs.push("5m trend down")}
+  if(R>=52&&R<=68){buy+=4;rb.push("RSI supportive")} else if(R<=48&&R>=32){sell+=4;rs.push("RSI supportive")}
+
+  let hardGate = spreadBps<=2.0 && VR>=0.35 && VR<=3.0 && bookSamples.length>=5;
+  let buyGate = hardGate && flow>0.08 && obi>-0.02 && micro>-0.03 && m15>-0.01 && E9>E21 && R<74;
+  let sellGate= hardGate && flow<-0.08 && obi<0.02 && micro<0.03 && m15<0.01 && E9<E21 && R>26;
+
+  let signal="WAIT";
+  if(buyGate && buy>=64 && buy>=sell+20) signal=buy>=82?"STRONG BUY":"BUY";
+  if(sellGate&& sell>=64&& sell>=buy+20) signal=sell>=82?"STRONG SELL":"SELL";
+
+  let confidence=signal==="WAIT"?Math.min(60,Math.max(buy,sell)):Math.min(95,Math.max(buy,sell));
+  const displaySignal = pending.length ? activeSignal : signal;
+  $("signal").textContent=displaySignal;
+  $("signal").className="signal "+displaySignal.toLowerCase().replace(" ","-");
+  $("confidence").textContent=Math.round(confidence)+"%";
+  $("confbar").style.width=Math.round(confidence)+"%";
+
+  let reasons=`BUY score <b>${buy}</b> • SELL score <b>${sell}</b><br>`;
+  reasons+=`BUY: ${rb.join(", ")||"none"}<br>SELL: ${rs.join(", ")||"none"}<br>`;
+  if(!hardGate) reasons+=`<span class="warn">WAIT gate: spread/volume/live-depth quality filter not satisfied.</span>`;
+  else if(signal==="WAIT") reasons+=`<span class="warn">WAIT: microstructure factors are not aligned strongly enough.</span>`;
+  else reasons+=`<span class="good">${signal}: strict 90-second setup confirmed.</span>`;
+  $("why").innerHTML=reasons;
+
+  if(signal!=="WAIT" && pending.length===0){
+    let now=Date.now();
+    if(now-lastSignalAt>30000){
+      lastSignalAt=now;activeUntil=now+30000;activeSignal=signal;
+      pending.push({due:activeUntil,time:new Date().toLocaleTimeString(),signal,entry:price});
+      fireSignalAlert(signal, price);
+      $("tradeCard").style.display="block";
+      $("entry").textContent="$"+fmt(price);
+      $("targettime").textContent=new Date(activeUntil).toLocaleTimeString();
+      if(signal.includes("BUY")){$("tp").textContent="$"+fmt(price*1.0025);$("sl").textContent="$"+fmt(price*0.9985)}
+      else{$("tp").textContent="$"+fmt(price*0.9975);$("sl").textContent="$"+fmt(price*1.0015)}
+    }
+  }
+}
+function updateValidity(){
+  if(pending.length && Date.now()<activeUntil){
+    let sec=Math.ceil((activeUntil-Date.now())/1000);
+    $("valid").textContent=sec+"s remaining";
+  }else {
+    $("valid").textContent="waiting";
+    if(!pending.length)$("tradeCard").style.display="none";
+  }
+}
+
+
+function beep(kind="BUY"){
+  try{
+    const Ctx=window.AudioContext||window.webkitAudioContext;
+    if(!Ctx)return;
+    const ctx=new Ctx(),o=ctx.createOscillator(),g=ctx.createGain();
+    o.connect(g);g.connect(ctx.destination);
+    o.frequency.value=kind.includes("BUY")?880:520;
+    g.gain.setValueAtTime(0.08,ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.45);
+    o.start();o.stop(ctx.currentTime+0.45);
+  }catch(e){}
+}
+async function enableNotifications(){
+  if(!("Notification" in window)){
+    $("notifyBtn").textContent="Notifications unsupported";
+    return;
+  }
+  try{
+    const p=await Notification.requestPermission();
+    notifyEnabled=p==="granted";
+    $("notifyBtn").textContent=notifyEnabled?"Notifications ON":"Permission blocked";
+  }catch(e){
+    $("notifyBtn").textContent="Notification error";
+  }
+}
+function fireSignalAlert(signal, entry){
+  beep(signal);
+  if(notifyEnabled && "Notification" in window && Notification.permission==="granted"){
+    try{
+      new Notification(`${SYMBOL.replace("USDT","/USDT")} • ${signal}`,{
+        body:`30s signal confirmed at ${fmt(entry)}. Open app for live validation.`,
+        tag:`${SYMBOL}-${signal}`,
+        renotify:true
+      });
+    }catch(e){}
+  }
+}
+function resetForPair(){
+  k1=[];k5=[];price=0;bestBid=0;bestAsk=0;bidQty=0;askQty=0;
+  trades=[];priceTicks=[];bookSamples=[];pending=[];
+  lastSignalAt=0;activeUntil=0;activeSignal="WAIT";
+  $("price").textContent="--";
+  $("signal").textContent="WAIT";$("signal").className="signal wait";
+  $("confidence").textContent="0%";$("confbar").style.width="0%";
+  $("tradeCard").style.display="none";$("valid").textContent="waiting";
+  $("pairLabel").textContent=SYMBOL.replace("USDT","/USDT")+" LIVE";
+  $("status").textContent="Switching pair...";
+  $("dot").classList.remove("live");
+}
+function connectStream(){
+  if(ws){try{ws.onclose=null;ws.close()}catch(e){}}
+  const base=SYMBOL.toLowerCase();
+  const streams=`${base}@aggTrade/${base}@bookTicker`;
+  ws=new WebSocket(`wss://stream.binance.com:9443/stream?streams=${streams}`);
+  ws.onopen=()=>{$("status").textContent="LIVE • Binance realtime";$("dot").classList.add("live")};
+  ws.onmessage=e=>{
+    let z=JSON.parse(e.data),d=z.data,st=z.stream;
+    if(st.endsWith("@aggTrade")){
+      price=+d.p;
+      $("price").textContent="$"+fmt(price, price<1?5:2);
+      let side=d.m?"SELL":"BUY";
+      trades.push({t:+d.T,side,notional:(+d.p)*(+d.q)});
+      trades=trades.filter(x=>Date.now()-x.t<=70000);
+      priceTicks.push({t:+d.T,p:+d.p});
+      priceTicks=priceTicks.filter(x=>Date.now()-x.t<=70000);
+    } else if(st.endsWith("@bookTicker")){
+      bestBid=+d.b;bidQty=+d.B;bestAsk=+d.a;askQty=+d.A;
+    }
+  };
+  ws.onerror=()=>{$("status").textContent="WebSocket error";$("dot").classList.remove("live")};
+  ws.onclose=()=>{$("status").textContent="Disconnected";$("dot").classList.remove("live")};
+}
+async function start(){
+  await refreshCandles();
+  for(let i=0;i<6;i++){await refreshDepth();await new Promise(r=>setTimeout(r,250))}
+  setInterval(refreshCandles,5000);
+  setInterval(refreshDepth,1000);
+  setInterval(settle,500);
+  setInterval(updateValidity,250);
+  setInterval(evaluate,500);
+
+  connectStream();
+  renderHistory();
+}
+$("notifyBtn").addEventListener("click", enableNotifications);
+$("pairSelect").addEventListener("change", async e=>{
+  SYMBOL=e.target.value;
+  resetForPair();
+  await refreshCandles();
+  for(let i=0;i<5;i++){await refreshDepth();await new Promise(r=>setTimeout(r,180))}
+  connectStream();
+});
+start();
+</script>
+</body>
+</html>
