@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Signal Engine V1</title><style>
+*{box-sizing:border-box}body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}.w{max-width:760px;margin:auto;padding:16px}
+.card{background:#181a20;border:1px solid #2b3139;border-radius:16px;padding:15px;margin:12px 0}h1{font-size:22px;margin:6px 0}.muted,.l{color:#848e9c}.muted{font-size:13px}.l{font-size:12px;margin-bottom:5px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#f6465d}.live{background:#0ecb81}.price{font-size:31px;font-weight:900}
+.hero{text-align:center}.sig{display:inline-block;padding:11px 22px;border-radius:99px;font-size:23px;font-weight:900;margin:12px}.wait{background:#f0b90b;color:#111}.buy,.strong-buy{background:#0ecb81;color:#03160e}.sell,.strong-sell{background:#f6465d;color:white}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.m{background:#111318;border-radius:12px;padding:12px}.v{font-size:17px;font-weight:800}
+.bar{height:9px;background:#2b3139;border-radius:99px;overflow:hidden}.fill{height:100%;background:#848e9c}
+.reason{font-size:13px;line-height:1.7}table{width:100%;border-collapse:collapse;font-size:12px}td,th{padding:7px 3px;border-bottom:1px solid #2b3139;text-align:left}th{color:#848e9c}
+</style></head><body><div class="w">
+<h1>Binance Live Signal Engine V1</h1><div class="muted"><span id="dot" class="dot"></span> <span id="status">Starting...</span></div>
+<div class="card hero"><div class="l">BTC/USDT LIVE</div><div id="price" class="price">--</div><div><span id="sig" class="sig wait">WAIT</span></div>
+<div>Confidence <b id="conf">0%</b></div><div class="bar" style="margin-top:9px"><div id="cb" class="fill" style="width:0"></div></div></div>
+<div class="card"><div class="grid">
+<div class="m"><div class="l">RSI 14</div><div id="rsi" class="v">--</div></div><div class="m"><div class="l">EMA 9 / 21</div><div id="ema" class="v">--</div></div>
+<div class="m"><div class="l">MACD Hist</div><div id="macd" class="v">--</div></div><div class="m"><div class="l">Volume</div><div id="vol" class="v">--</div></div>
+<div class="m"><div class="l">5m Trend</div><div id="trend" class="v">--</div></div><div class="m"><div class="l">Order Book Avg</div><div id="book" class="v">Collecting...</div></div>
+</div></div>
+<div class="card"><div class="grid">
+<div class="m"><div class="l">Entry</div><div id="entry" class="v">--</div></div><div class="m"><div class="l">Next Candle</div><div id="count" class="v">--</div></div>
+<div class="m"><div class="l">Illustrative TP</div><div id="tp" class="v">--</div></div><div class="m"><div class="l">Illustrative SL</div><div id="sl" class="v">--</div></div>
+</div></div>
+<div class="card"><div class="l">Why this signal?</div><div id="why" class="reason">Waiting for enough live data...</div></div>
+<div class="card"><div class="l">Tracked 1-Minute Direction Accuracy</div><div id="acc" class="v">No completed signals</div><div style="overflow:auto"><table><thead><tr><th>Time</th><th>Signal</th><th>Entry</th><th>After 1m</th><th>Result</th></tr></thead><tbody id="hist"></tbody></table></div></div>
+<div class="card muted">This is a heuristic market-analysis tool, not a guaranteed predictor. WAIT is intentional when evidence conflicts. TP/SL are illustrative only. Test performance before risking real funds.</div>
+</div><script>
+const $=x=>document.getElementById(x);let a1=[],a5=[],price=0,books=[],pending=[],lastTracked=-1;
+let results=JSON.parse(localStorage.getItem("signalV1Results")||"[]");
+function fmt(n){return Number(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+function ema(v,p){if(v.length<p)return null;let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1);for(let i=p;i<v.length;i++)e=v[i]*k+e*(1-k);return e}
+function es(v,p){if(v.length<p)return[];let e=v.slice(0,p).reduce((a,b)=>a+b,0)/p,k=2/(p+1),o=[e];for(let i=p;i<v.length;i++){e=v[i]*k+e*(1-k);o.push(e)}return o}
+function rsi(v,p=14){let g=[],l=[];for(let i=1;i<v.length;i++){let d=v[i]-v[i-1];g.push(Math.max(d,0));l.push(Math.max(-d,0))}if(g.length<p)return null;let ag=g.slice(0,p).reduce((a,b)=>a+b,0)/p,al=l.slice(0,p).reduce((a,b)=>a+b,0)/p;for(let i=p;i<g.length;i++){ag=(ag*(p-1)+g[i])/p;al=(al*(p-1)+l[i])/p}return al===0?100:100-100/(1+ag/al)}
+function macd(v){let f=es(v,12),s=es(v,26);if(!s.length)return null;let off=f.length-s.length,line=s.map((x,i)=>f[i+off]-x),sg=ema(line,9);return sg==null?null:line.at(-1)-sg}
+async function kl(i){let r=await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=${i}&limit=120`,{cache:"no-store"});if(!r.ok)throw Error("kline "+r.status);return r.json()}
+async function book(){try{let r=await fetch("https://data-api.binance.vision/api/v3/depth?symbol=BTCUSDT&limit=20",{cache:"no-store"}),d=await r.json();let b=d.bids.reduce((s,x)=>s+(+x[0])*(+x[1]),0),a=d.asks.reduce((s,x)=>s+(+x[0])*(+x[1]),0),ratio=a?b/a:1;books.push(ratio);if(books.length>10)books.shift();calc()}catch(e){}}
+function calc(){
+ if(a1.length<40||a5.length<30||!price)return;let c=a1.map(x=>+x[4]),vv=a1.map(x=>+x[5]),c5=a5.map(x=>+x[4]);
+ let R=rsi(c),E9=ema(c,9),E21=ema(c,21),M=macd(c),avg=vv.slice(-21,-1).reduce((a,b)=>a+b,0)/20,VR=avg?vv.at(-1)/avg:1,T=ema(c5,9)>ema(c5,21)?"UP":"DOWN";
+ let br=books.length?books.reduce((a,b)=>a+b,0)/books.length:1,B=0,S=0,rb=[],rs=[];
+ if(E9>E21){B+=20;rb.push("EMA9 above EMA21")}else{S+=20;rs.push("EMA9 below EMA21")}
+ if(R>=52&&R<=68){B+=15;rb.push("RSI bullish zone")}else if(R<=48&&R>=32){S+=15;rs.push("RSI bearish zone")}else if(R>72){S+=8;rs.push("RSI overbought")}else if(R<28){B+=8;rb.push("RSI oversold")}
+ if(M>0){B+=20;rb.push("MACD positive")}else{S+=20;rs.push("MACD negative")}
+ if(T==="UP"){B+=20;rb.push("5m trend UP")}else{S+=20;rs.push("5m trend DOWN")}
+ if(VR>1.15){if(c.at(-1)>=c.at(-2)){B+=10;rb.push("volume confirms rise")}else{S+=10;rs.push("volume confirms fall")}}
+ if(books.length>=5){if(br>1.15){B+=15;rb.push("order-book avg favors bids")}else if(br<.87){S+=15;rs.push("order-book avg favors asks")}}
+ let sig="WAIT",mx=Math.max(B,S);if(B>=85&&B>=S+25)sig="STRONG BUY";else if(B>=65&&B>=S+18)sig="BUY";else if(S>=85&&S>=B+25)sig="STRONG SELL";else if(S>=65&&S>=B+18)sig="SELL";
+ let conf=Math.min(95,Math.round(mx));
+ $("rsi").textContent=R.toFixed(1);$("ema").textContent=fmt(E9)+" / "+fmt(E21);$("macd").textContent=M.toFixed(4);$("vol").textContent=VR.toFixed(2)+"x";$("trend").textContent=T;$("book").textContent=books.length<5?`Collecting ${books.length}/5`:br.toFixed(3);
+ $("sig").textContent=sig;$("sig").className="sig "+sig.toLowerCase().replace(" ","-");$("conf").textContent=conf+"%";$("cb").style.width=conf+"%";$("entry").textContent="$"+fmt(price);
+ if(sig.includes("BUY")){$("tp").textContent="$"+fmt(price*1.003);$("sl").textContent="$"+fmt(price*.998)}else if(sig.includes("SELL")){$("tp").textContent="$"+fmt(price*.997);$("sl").textContent="$"+fmt(price*1.002)}else{$("tp").textContent=$("sl").textContent="--"}
+ $("why").innerHTML=`Buy score: <b>${B}</b> • Sell score: <b>${S}</b><br>BUY: ${rb.join(", ")||"none"}<br>SELL: ${rs.join(", ")||"none"}`;
+ track(sig,conf);
+}
+function track(sig,conf){let min=Math.floor(Date.now()/60000);if(sig==="WAIT"||conf<65||min===lastTracked)return;lastTracked=min;pending.push({due:Date.now()+60000,time:new Date().toLocaleTimeString(),sig,entry:price})}
+function settle(){let keep=[];for(let x of pending){if(Date.now()>=x.due&&price){let win=x.sig.includes("BUY")?price>x.entry:price<x.entry;results.unshift({...x,end:price,res:win?"WIN":"LOSS"});results=results.slice(0,30);localStorage.setItem("signalV1Results",JSON.stringify(results))}else keep.push(x)}pending=keep;render()}
+function render(){let w=results.filter(x=>x.res==="WIN").length;$("acc").textContent=results.length?`${Math.round(w/results.length*100)}% • ${w}/${results.length}`:"No completed signals";$("hist").innerHTML=results.slice(0,8).map(x=>`<tr><td>${x.time}</td><td>${x.sig}</td><td>${fmt(x.entry)}</td><td>${fmt(x.end)}</td><td>${x.res}</td></tr>`).join("")}
+async function refresh(){try{[a1,a5]=await Promise.all([kl("1m"),kl("5m")]);calc()}catch(e){}}
+async function start(){await refresh();let ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");ws.onmessage=e=>{let d=JSON.parse(e.data);price=+d.p;$("price").textContent="$"+fmt(price);$("dot").classList.add("live");$("status").textContent="LIVE • Binance";calc()};ws.onerror=()=>{$("status").textContent="WebSocket error"};book();setInterval(book,2000);setInterval(refresh,5000);setInterval(settle,1000);render()}
+setInterval(()=>{$("count").textContent="00:"+String(Math.max(0,Math.floor((60000-Date.now()%60000)/1000))).padStart(2,"0")},250);start();
+</script></body></html>
