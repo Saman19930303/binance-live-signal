@@ -1,0 +1,50 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Binance Connection Diagnostic</title>
+<style>
+body{margin:0;background:#0b0e11;color:#eaecef;font-family:Arial,sans-serif}.w{max-width:700px;margin:auto;padding:18px}
+h1{font-size:23px}.card{background:#181a20;border:1px solid #2b3139;border-radius:15px;padding:15px;margin:12px 0}
+.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.name{font-weight:700}.small{font-size:12px;color:#848e9c;word-break:break-word;margin-top:8px}
+.badge{padding:6px 10px;border-radius:99px;font-weight:800;font-size:12px}.testing{background:#f0b90b;color:#111}.pass{background:#0ecb81;color:#04170f}.fail{background:#f6465d;color:#fff}
+button{width:100%;border:0;border-radius:12px;padding:14px;font-weight:800;font-size:16px;background:#f0b90b;color:#111}
+pre{white-space:pre-wrap;word-break:break-word;font-size:12px;color:#b7bdc6}
+</style></head>
+<body><div class="w"><h1>Binance Connection Diagnostic</h1>
+<p class="small">This page tests public market-data routes only. No Binance login or API key is used.</p>
+<div id="tests"></div><button onclick="run()">Run Tests Again</button>
+<div class="card"><div class="name">Summary</div><pre id="summary">Running...</pre></div></div>
+<script>
+const tests=[
+ {id:"restData",name:"REST • Market Data Only",type:"fetch",url:"https://data-api.binance.vision/api/v3/time"},
+ {id:"restMain",name:"REST • api.binance.com",type:"fetch",url:"https://api.binance.com/api/v3/time"},
+ {id:"restGcp",name:"REST • api-gcp.binance.com",type:"fetch",url:"https://api-gcp.binance.com/api/v3/time"},
+ {id:"ws9443",name:"WebSocket • stream.binance.com:9443",type:"ws",url:"wss://stream.binance.com:9443/ws/btcusdt@trade"}
+];
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function render(){
+ document.getElementById("tests").innerHTML=tests.map(t=>`<div class="card"><div class="row"><div class="name">${t.name}</div><span id="${t.id}b" class="badge testing">TESTING</span></div><div id="${t.id}d" class="small">${t.url}</div></div>`).join("")
+}
+function set(t,ok,msg){let b=document.getElementById(t.id+"b"),d=document.getElementById(t.id+"d");b.className="badge "+(ok?"pass":"fail");b.textContent=ok?"PASS":"FAIL";d.innerHTML=esc(t.url)+"<br>"+esc(msg)}
+async function ftest(t){
+ let ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),8000),st=performance.now();
+ try{let r=await fetch(t.url,{cache:"no-store",signal:ctrl.signal});let tx=await r.text();clearTimeout(timer);
+ if(!r.ok)throw new Error("HTTP "+r.status+" "+tx.slice(0,120));set(t,true,`HTTP ${r.status} • ${Math.round(performance.now()-st)} ms • ${tx.slice(0,120)}`);return true}
+ catch(e){clearTimeout(timer);set(t,false,e.name+": "+e.message);return false}
+}
+function wtest(t){return new Promise(resolve=>{let done=false,st=performance.now(),ws;
+ let timer=setTimeout(()=>finish(false,"Timeout after 8s"),8000);
+ function finish(ok,msg){if(done)return;done=true;clearTimeout(timer);try{ws&&ws.close()}catch(e){}set(t,ok,msg);resolve(ok)}
+ try{ws=new WebSocket(t.url);ws.onopen=()=>{};ws.onmessage=e=>finish(true,`Message received • ${Math.round(performance.now()-st)} ms • ${String(e.data).slice(0,120)}`);
+ ws.onerror=()=>finish(false,"WebSocket error (browser does not expose lower-level network reason)");
+ ws.onclose=e=>{if(!done)finish(false,`Closed before data • code ${e.code}`)}}catch(e){finish(false,e.name+": "+e.message)}})}
+async function run(){
+ render();document.getElementById("summary").textContent="Running...";
+ let out={};for(const t of tests)out[t.id]=t.type==="fetch"?await ftest(t):await wtest(t);
+ let passed=Object.values(out).filter(Boolean).length;
+ let advice= passed===tests.length ? "All routes passed. Direct Binance connection works on this browser/network." :
+ out.restData ? "Market-data REST works. We can build the app around data-api.binance.vision; WebSocket result above tells us whether streaming is usable." :
+ "Public Binance REST is blocked/unreachable on this browser/network. A server-side relay/proxy is likely required.";
+ document.getElementById("summary").textContent=`Passed ${passed}/${tests.length}\n\n${advice}`;
+}
+run();
+</script></body></html>
