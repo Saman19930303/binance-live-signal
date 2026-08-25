@@ -1,6 +1,6 @@
-// Binance Signal Engine V4
+// Binance Signal Engine V5
 // Cloudflare Worker
-// Educational market-analysis engine — not a guaranteed predictor.
+// Closed-candle + Multi-Timeframe Confirmation
 
 const API = "https://api-gcp.binance.com";
 
@@ -26,725 +26,624 @@ const CORS = {
 };
 
 function json(data, status = 200) {
-  return new Response(
-    JSON.stringify(data, null, 2),
-    {
-      status,
-      headers: CORS
-    }
-  );
+  return new Response(JSON.stringify(data, null, 2), {
+    status,
+    headers: CORS
+  });
 }
 
 async function getJSON(path) {
-  const response = await fetch(API + path, {
-    method: "GET",
-    headers: {
-      Accept: "application/json"
-    }
+  const r = await fetch(API + path, {
+    headers: { Accept: "application/json" }
   });
 
-  if (!response.ok) {
-    const body = await response
-      .text()
-      .catch(() => "");
-
-    throw new Error(
-      `Binance HTTP ${response.status} ${path}` +
-      (body ? ` - ${body.slice(0, 120)}` : "")
-    );
+  if (!r.ok) {
+    throw new Error(`Binance HTTP ${r.status}`);
   }
 
-  return response.json();
+  return r.json();
 }
 
-
-// -------------------------
-// EMA
-// -------------------------
-
-function ema(values, period) {
-
-  if (!values || values.length < period) {
-    return null;
-  }
-
-  let value =
-    values
-      .slice(0, period)
-      .reduce((a, b) => a + b, 0) / period;
-
-  const multiplier = 2 / (period + 1);
-
-  for (let i = period; i < values.length; i++) {
-    value =
-      values[i] * multiplier +
-      value * (1 - multiplier);
-  }
-
-  return value;
+function avg(a) {
+  return a.length
+    ? a.reduce((x, y) => x + y, 0) / a.length
+    : 0;
 }
 
+function ema(v, p) {
+  if (!v || v.length < p) return null;
 
-// -------------------------
-// EMA SERIES
-// -------------------------
+  let e = avg(v.slice(0, p));
+  const k = 2 / (p + 1);
 
-function emaSeries(values, period) {
-
-  if (!values || values.length < period) {
-    return [];
+  for (let i = p; i < v.length; i++) {
+    e = v[i] * k + e * (1 - k);
   }
 
-  let value =
-    values
-      .slice(0, period)
-      .reduce((a, b) => a + b, 0) / period;
-
-  const multiplier = 2 / (period + 1);
-
-  const output = [value];
-
-  for (let i = period; i < values.length; i++) {
-
-    value =
-      values[i] * multiplier +
-      value * (1 - multiplier);
-
-    output.push(value);
-  }
-
-  return output;
+  return e;
 }
 
+function emaSeries(v, p) {
+  if (!v || v.length < p) return [];
 
-// -------------------------
-// RSI
-// -------------------------
+  let e = avg(v.slice(0, p));
+  const k = 2 / (p + 1);
+  const out = [e];
 
-function rsi(values, period = 14) {
-
-  if (!values || values.length <= period) {
-    return null;
+  for (let i = p; i < v.length; i++) {
+    e = v[i] * k + e * (1 - k);
+    out.push(e);
   }
 
-  let gains = 0;
-  let losses = 0;
-
-  for (let i = 1; i <= period; i++) {
-
-    const diff =
-      values[i] - values[i - 1];
-
-    if (diff >= 0) {
-      gains += diff;
-    } else {
-      losses += Math.abs(diff);
-    }
-  }
-
-  let avgGain = gains / period;
-  let avgLoss = losses / period;
-
-  for (let i = period + 1; i < values.length; i++) {
-
-    const diff =
-      values[i] - values[i - 1];
-
-    const gain =
-      diff > 0 ? diff : 0;
-
-    const loss =
-      diff < 0 ? Math.abs(diff) : 0;
-
-    avgGain =
-      ((avgGain * (period - 1)) + gain) /
-      period;
-
-    avgLoss =
-      ((avgLoss * (period - 1)) + loss) /
-      period;
-  }
-
-  if (avgLoss === 0) {
-    return 100;
-  }
-
-  const rs =
-    avgGain / avgLoss;
-
-  return 100 - (100 / (1 + rs));
+  return out;
 }
 
+function rsi(v, p = 14) {
+  if (!v || v.length <= p) return null;
 
-// -------------------------
-// MACD
-// -------------------------
+  let gain = 0;
+  let loss = 0;
 
-function macd(values) {
+  for (let i = 1; i <= p; i++) {
+    const d = v[i] - v[i - 1];
 
-  if (!values || values.length < 35) {
-    return null;
+    if (d >= 0) gain += d;
+    else loss += Math.abs(d);
   }
 
-  const fast =
-    emaSeries(values, 12);
+  let ag = gain / p;
+  let al = loss / p;
 
-  const slow =
-    emaSeries(values, 26);
+  for (let i = p + 1; i < v.length; i++) {
+    const d = v[i] - v[i - 1];
 
-  if (!fast.length || !slow.length) {
-    return null;
+    const g = d > 0 ? d : 0;
+    const l = d < 0 ? Math.abs(d) : 0;
+
+    ag = ((ag * (p - 1)) + g) / p;
+    al = ((al * (p - 1)) + l) / p;
   }
 
-  const offset = 26 - 12;
+  if (al === 0) return 100;
 
-  const macdLine = [];
+  return 100 - (100 / (1 + ag / al));
+}
 
-  for (let i = 0; i < slow.length; i++) {
+function macd(v) {
+  const fast = emaSeries(v, 12);
+  const slow = emaSeries(v, 26);
 
-    const fastIndex =
-      i + offset;
+  if (!fast.length || !slow.length) return null;
 
-    if (fastIndex < fast.length) {
+  const offset = fast.length - slow.length;
 
-      macdLine.push(
-        fast[fastIndex] - slow[i]
-      );
-    }
-  }
+  const line = slow.map(
+    (x, i) => fast[i + offset] - x
+  );
 
-  if (macdLine.length < 9) {
-    return null;
-  }
+  if (line.length < 9) return null;
 
-  const signal =
-    ema(macdLine, 9);
-
-  const line =
-    macdLine[macdLine.length - 1];
+  const signal = ema(line, 9);
+  const current = line.at(-1);
 
   return {
-    line,
+    line: current,
     signal,
-    histogram: line - signal
+    histogram: current - signal
   };
 }
 
+function atr(rows, p = 14) {
+  if (!rows || rows.length < p + 1) return null;
 
-// -------------------------
-// ATR
-// -------------------------
+  const tr = [];
 
-function atr(highs, lows, closes, period = 14) {
+  for (let i = 1; i < rows.length; i++) {
+    const high = +rows[i][2];
+    const low = +rows[i][3];
+    const prevClose = +rows[i - 1][4];
 
-  if (closes.length <= period) {
-    return null;
-  }
-
-  const ranges = [];
-
-  for (let i = 1; i < closes.length; i++) {
-
-    const highLow =
-      highs[i] - lows[i];
-
-    const highClose =
-      Math.abs(highs[i] - closes[i - 1]);
-
-    const lowClose =
-      Math.abs(lows[i] - closes[i - 1]);
-
-    ranges.push(
+    tr.push(
       Math.max(
-        highLow,
-        highClose,
-        lowClose
+        high - low,
+        Math.abs(high - prevClose),
+        Math.abs(low - prevClose)
       )
     );
   }
 
-  return ema(ranges, period);
+  return ema(tr, p);
 }
 
+function volumeRatio(rows) {
+  if (!rows || rows.length < 21) return null;
 
-// -------------------------
-// VOLUME ANALYSIS
-// -------------------------
+  const volumes = rows.map(r => +r[5]);
 
-function volumeAnalysis(volumes) {
+  const current = volumes.at(-1);
+  const previous = volumes.slice(-21, -1);
 
-  if (!volumes || volumes.length < 21) {
-    return null;
-  }
+  const average = avg(previous);
 
-  const current =
-    volumes[volumes.length - 1];
+  return average > 0
+    ? current / average
+    : 0;
+}
 
-  const previous =
-    volumes.slice(-21, -1);
+function marketStructure(rows) {
+  if (!rows || rows.length < 12) return "RANGE";
 
-  const average =
-    previous.reduce((a, b) => a + b, 0) /
-    previous.length;
+  const recent = rows.slice(-12);
 
-  const ratio =
-    average > 0
-      ? current / average
-      : 0;
+  const a = recent.slice(0, 6);
+  const b = recent.slice(6);
+
+  const ah = Math.max(...a.map(x => +x[2]));
+  const al = Math.min(...a.map(x => +x[3]));
+
+  const bh = Math.max(...b.map(x => +x[2]));
+  const bl = Math.min(...b.map(x => +x[3]));
+
+  if (bh > ah && bl > al) return "BULLISH";
+  if (bh < ah && bl < al) return "BEARISH";
+
+  return "RANGE";
+}
+
+function supportResistance(rows) {
+  const x = rows.slice(-50);
 
   return {
-    current,
-    average,
-    ratio
+    support: Math.min(...x.map(r => +r[3])),
+    resistance: Math.max(...x.map(r => +r[2]))
   };
 }
 
-
-// -------------------------
-// ANALYZE SYMBOL
-// -------------------------
+function round(n, d = 8) {
+  if (n == null || !Number.isFinite(n)) return null;
+  return Number(n.toFixed(d));
+}
 
 async function analyze(symbol) {
-
-  symbol =
-    String(symbol || "")
-      .toUpperCase()
-      .trim();
+  symbol = String(symbol || "").toUpperCase().trim();
 
   if (!PAIRS.includes(symbol)) {
-
     return {
       ok: false,
       error: "Unsupported symbol",
-      symbol,
       supported: PAIRS
     };
   }
 
-  const klines =
-    await getJSON(
-      `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&limit=120`
-    );
+  /*
+    Only two Binance requests per pair.
 
-  if (!Array.isArray(klines) || klines.length < 60) {
-    throw new Error("Not enough Binance candle data");
-  }
+    /scan:
+    10 pairs × 2 = 20 requests
+  */
 
-  const highs =
-    klines.map(k => Number(k[2]));
+  const [raw1m, raw5m] = await Promise.all([
+    getJSON(
+      `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&limit=210`
+    ),
 
-  const lows =
-    klines.map(k => Number(k[3]));
+    getJSON(
+      `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=5m&limit=120`
+    )
+  ]);
 
-  const closes =
-    klines.map(k => Number(k[4]));
-
-  const volumes =
-    klines.map(k => Number(k[5]));
-
-  const price =
-    closes[closes.length - 1];
-
-  const ema9 =
-    ema(closes, 9);
-
-  const ema21 =
-    ema(closes, 21);
-
-  const ema50 =
-    ema(closes, 50);
-
-  const RSI =
-    rsi(closes, 14);
-
-  const MACD =
-    macd(closes);
-
-  const ATR =
-    atr(
-      highs,
-      lows,
-      closes,
-      14
-    );
-
-  const volume =
-    volumeAnalysis(volumes);
-
-
-  // -------------------------
-  // SCORE ENGINE
-  // -------------------------
-
-  let bullish = 0;
-  let bearish = 0;
-
-  const reasons = [];
-
-
-  // EMA 9 / EMA 21
-
-  if (ema9 > ema21) {
-
-    bullish += 2;
-
-    reasons.push(
-      "EMA9 above EMA21"
-    );
-
-  } else {
-
-    bearish += 2;
-
-    reasons.push(
-      "EMA9 below EMA21"
-    );
-  }
-
-
-  // EMA 21 / EMA 50
-
-  if (ema21 > ema50) {
-
-    bullish += 2;
-
-    reasons.push(
-      "EMA21 above EMA50"
-    );
-
-  } else {
-
-    bearish += 2;
-
-    reasons.push(
-      "EMA21 below EMA50"
-    );
-  }
-
-
-  // PRICE / EMA21
-
-  if (price > ema21) {
-
-    bullish += 1;
-
-    reasons.push(
-      "Price above EMA21"
-    );
-
-  } else {
-
-    bearish += 1;
-
-    reasons.push(
-      "Price below EMA21"
-    );
-  }
-
-
-  // RSI
-
-  if (RSI >= 52 && RSI <= 70) {
-
-    bullish += 2;
-
-    reasons.push(
-      "RSI bullish zone"
-    );
-
-  } else if (
-    RSI <= 48 &&
-    RSI >= 30
+  if (
+    !Array.isArray(raw1m) ||
+    !Array.isArray(raw5m) ||
+    raw1m.length < 201 ||
+    raw5m.length < 60
   ) {
-
-    bearish += 2;
-
-    reasons.push(
-      "RSI bearish zone"
-    );
-
-  } else {
-
-    reasons.push(
-      "RSI neutral/extreme"
-    );
+    throw new Error("Not enough candle data");
   }
 
+  /*
+    IMPORTANT:
+    Binance returns the currently-forming candle as the
+    final element.
 
-  // MACD
+    Remove it before calculating indicators.
+  */
 
-  if (MACD) {
+  const c1 = raw1m.slice(0, -1);
+  const c5 = raw5m.slice(0, -1);
 
-    if (
-      MACD.line > MACD.signal &&
-      MACD.histogram > 0
-    ) {
+  const close1 = c1.map(x => +x[4]);
+  const close5 = c5.map(x => +x[4]);
 
-      bullish += 2;
+  const price = close1.at(-1);
 
-      reasons.push(
-        "MACD bullish"
-      );
+  // 1 MINUTE
 
-    } else if (
-      MACD.line < MACD.signal &&
-      MACD.histogram < 0
-    ) {
+  const e9 = ema(close1, 9);
+  const e21 = ema(close1, 21);
+  const e50 = ema(close1, 50);
+  const e200 = ema(close1, 200);
 
-      bearish += 2;
+  const R = rsi(close1, 14);
+  const M = macd(close1);
+  const A = atr(c1, 14);
+  const VR = volumeRatio(c1);
 
-      reasons.push(
-        "MACD bearish"
-      );
+  const structure = marketStructure(c1);
+  const sr = supportResistance(c1);
+
+  // 5 MINUTE
+
+  const e9_5 = ema(close5, 9);
+  const e21_5 = ema(close5, 21);
+  const e50_5 = ema(close5, 50);
+
+  const rsi5 = rsi(close5, 14);
+  const macd5 = macd(close5);
+
+  const trend5 =
+    e9_5 > e21_5 && e21_5 > e50_5
+      ? "BULLISH"
+      : e9_5 < e21_5 && e21_5 < e50_5
+      ? "BEARISH"
+      : "MIXED";
+
+  let bull = 0;
+  let bear = 0;
+
+  const bullish = [];
+  const bearish = [];
+
+  function score(bullCondition, bearCondition, points, bText, sText) {
+    if (bullCondition) {
+      bull += points;
+      bullish.push(bText);
+    } else if (bearCondition) {
+      bear += points;
+      bearish.push(sText);
     }
   }
 
+  // 1m EMA short trend — 10
+  score(
+    e9 > e21,
+    e9 < e21,
+    10,
+    "1m EMA9 > EMA21",
+    "1m EMA9 < EMA21"
+  );
 
-  // Volume confirmation
+  // Main EMA trend — 12
+  score(
+    e50 > e200,
+    e50 < e200,
+    12,
+    "EMA50 > EMA200",
+    "EMA50 < EMA200"
+  );
 
-  if (volume && volume.ratio >= 1.2) {
+  // Price location — 8
+  score(
+    price > e21 && price > e50,
+    price < e21 && price < e50,
+    8,
+    "Price above EMA21/50",
+    "Price below EMA21/50"
+  );
 
-    if (price >= ema9) {
+  // RSI 1m — 10
+  score(
+    R >= 52 && R <= 68,
+    R <= 48 && R >= 32,
+    10,
+    "1m RSI bullish",
+    "1m RSI bearish"
+  );
 
-      bullish += 1;
+  // MACD 1m — 10
+  if (M) {
+    score(
+      M.histogram > 0 && M.line > M.signal,
+      M.histogram < 0 && M.line < M.signal,
+      10,
+      "1m MACD bullish",
+      "1m MACD bearish"
+    );
+  }
 
-      reasons.push(
-        "Strong volume supports bullish move"
-      );
+  // Structure — 10
+  score(
+    structure === "BULLISH",
+    structure === "BEARISH",
+    10,
+    "Bullish market structure",
+    "Bearish market structure"
+  );
 
-    } else {
+  // 5m trend — 18
+  score(
+    trend5 === "BULLISH",
+    trend5 === "BEARISH",
+    18,
+    "5m trend bullish",
+    "5m trend bearish"
+  );
 
-      bearish += 1;
+  // 5m RSI — 8
+  score(
+    rsi5 >= 52 && rsi5 <= 70,
+    rsi5 <= 48 && rsi5 >= 30,
+    8,
+    "5m RSI bullish",
+    "5m RSI bearish"
+  );
 
-      reasons.push(
-        "Strong volume supports bearish move"
-      );
+  // 5m MACD — 8
+  if (macd5) {
+    score(
+      macd5.histogram > 0,
+      macd5.histogram < 0,
+      8,
+      "5m MACD bullish",
+      "5m MACD bearish"
+    );
+  }
+
+  /*
+    Volume is confirmation only.
+    A low-volume candle must NOT create a directional score.
+  */
+
+  if (VR >= 1.1) {
+    if (bull > bear) {
+      bull += 6;
+      bullish.push("Closed-candle volume confirms bullish move");
+    } else if (bear > bull) {
+      bear += 6;
+      bearish.push("Closed-candle volume confirms bearish move");
     }
   }
 
+  bull = Math.min(100, bull);
+  bear = Math.min(100, bear);
 
-  // -------------------------
-  // FINAL SIGNAL
-  // -------------------------
+  const difference = Math.abs(bull - bear);
 
-  const difference =
-    bullish - bearish;
+  /*
+    Strong filtering:
+    - Score >= 68
+    - Difference >= 24
+    - 5m cannot oppose the trade
+    - RSI cannot be extremely stretched
+  */
+
+  const buyAllowed =
+    bull >= 68 &&
+    bull > bear &&
+    difference >= 24 &&
+    trend5 !== "BEARISH" &&
+    R < 72;
+
+  const sellAllowed =
+    bear >= 68 &&
+    bear > bull &&
+    difference >= 24 &&
+    trend5 !== "BULLISH" &&
+    R > 28;
 
   let signal = "WAIT";
 
-  if (difference >= 4) {
-    signal = "BUY";
+  if (buyAllowed) signal = "BUY";
+  if (sellAllowed) signal = "SELL";
+
+  /*
+    Signal Strength is NOT win probability.
+  */
+
+  const signalStrength =
+    signal === "BUY"
+      ? bull
+      : signal === "SELL"
+      ? bear
+      : Math.min(67, Math.max(bull, bear));
+
+  /*
+    ATR-based reference levels.
+    These are analysis levels, not guaranteed outcomes.
+  */
+
+  let entry = null;
+  let tp = null;
+  let sl = null;
+
+  if (signal !== "WAIT" && A) {
+    entry = price;
+
+    if (signal === "BUY") {
+      tp = price + (A * 1.5);
+      sl = price - A;
+    } else {
+      tp = price - (A * 1.5);
+      sl = price + A;
+    }
   }
-
-  if (difference <= -4) {
-    signal = "SELL";
-  }
-
-
-  // Confidence is a heuristic,
-  // NOT statistical prediction accuracy.
-
-  const total =
-    bullish + bearish;
-
-  let confidence =
-    total > 0
-      ? Math.round(
-          Math.max(bullish, bearish) /
-          total *
-          100
-        )
-      : 50;
-
-  if (signal === "WAIT") {
-    confidence =
-      Math.min(confidence, 60);
-  }
-
 
   return {
-
     ok: true,
 
-    engine:
-      "Binance Signal Engine V4",
+    engine: "Binance Signal Engine V5",
 
     symbol,
 
-    interval: "1m",
-
-    price,
-
     signal,
 
-    confidence,
+    signalStrength,
+
+    strengthMeaning:
+      "Indicator confirmation strength, not win probability",
+
+    timeframe: {
+      entry: "1m",
+      confirmation: "5m"
+    },
+
+    price: round(price),
+
+    trade: {
+      entry: round(entry),
+      tp: round(tp),
+      sl: round(sl)
+    },
 
     scores: {
-      bullish,
-      bearish,
+      bullish: bull,
+      bearish: bear,
       difference
     },
 
-    indicators: {
+    trend: {
+      oneMinute:
+        e9 > e21 ? "UP" : e9 < e21 ? "DOWN" : "FLAT",
 
-      rsi:
-        Number(RSI.toFixed(2)),
+      fiveMinute: trend5,
 
-      ema9:
-        Number(ema9.toFixed(8)),
+      main:
+        e50 > e200 ? "UP" : e50 < e200 ? "DOWN" : "FLAT",
 
-      ema21:
-        Number(ema21.toFixed(8)),
-
-      ema50:
-        Number(ema50.toFixed(8)),
-
-      macd: MACD
-        ? {
-            line:
-              Number(MACD.line.toFixed(8)),
-
-            signal:
-              Number(MACD.signal.toFixed(8)),
-
-            histogram:
-              Number(MACD.histogram.toFixed(8))
-          }
-        : null,
-
-      atr:
-        ATR !== null
-          ? Number(ATR.toFixed(8))
-          : null,
-
-      volumeRatio:
-        volume
-          ? Number(volume.ratio.toFixed(2))
-          : null
+      marketStructure: structure
     },
 
-    reasons,
+    indicators: {
+      rsi1m: round(R, 2),
+      rsi5m: round(rsi5, 2),
 
-    candleCloseTime:
-      klines[klines.length - 1][6],
+      ema9: round(e9),
+      ema21: round(e21),
+      ema50: round(e50),
+      ema200: round(e200),
+
+      macd1mHistogram:
+        M ? round(M.histogram) : null,
+
+      macd5mHistogram:
+        macd5 ? round(macd5.histogram) : null,
+
+      atr14: round(A),
+
+      closedCandleVolumeRatio:
+        round(VR, 2),
+
+      support: round(sr.support),
+      resistance: round(sr.resistance)
+    },
+
+    confirmations: {
+      bullish,
+      bearish
+    },
+
+    candle: {
+      dataType: "CLOSED_CANDLES_ONLY",
+
+      lastClosed1m:
+        new Date(c1.at(-1)[6]).toISOString(),
+
+      lastClosed5m:
+        new Date(c5.at(-1)[6]).toISOString()
+    },
 
     generatedAt:
       new Date().toISOString(),
 
     warning:
-      "Signal is indicator-based analysis, not a guaranteed future-price prediction."
+      "Market-analysis signal only. Signal strength is not prediction accuracy."
   };
 }
 
+async function scan() {
+  const results = await Promise.all(
+    PAIRS.map(async symbol => {
+      try {
+        return await analyze(symbol);
+      } catch (e) {
+        return {
+          ok: false,
+          symbol,
+          signal: "ERROR",
+          error: e.message
+        };
+      }
+    })
+  );
 
-// -------------------------
-// WORKER
-// -------------------------
+  const signals = results
+    .filter(x => x.signal === "BUY" || x.signal === "SELL")
+    .sort((a, b) => b.signalStrength - a.signalStrength);
+
+  return {
+    ok: true,
+    engine: "Binance Signal Engine V5",
+    pairsChecked: PAIRS.length,
+    signalsFound: signals.length,
+    signals,
+    allResults: results,
+    generatedAt: new Date().toISOString()
+  };
+}
 
 export default {
-
   async fetch(request) {
-
     if (request.method === "OPTIONS") {
-
-      return new Response(
-        null,
-        {
-          status: 204,
-          headers: CORS
-        }
-      );
+      return new Response(null, {
+        status: 204,
+        headers: CORS
+      });
     }
 
     try {
-
-      const url =
-        new URL(request.url);
+      const url = new URL(request.url);
 
       const path =
         url.pathname.replace(/\/+$/, "") || "/";
 
-
-      // HOME
-
       if (path === "/") {
-
         return json({
-
           ok: true,
-
-          name:
-            "Binance Signal Engine V4",
-
+          engine: "Binance Signal Engine V5",
           endpoints: [
-
             "/health",
-
             "/pairs",
-
             "/signal?symbol=BTCUSDT",
-
             "/scan"
           ]
-
         });
       }
-
-
-      // HEALTH
 
       if (path === "/health") {
-
-        const server =
-          await getJSON(
-            "/api/v3/time"
-          );
+        const time = await getJSON("/api/v3/time");
 
         return json({
-
           ok: true,
-
-          engine:
-            "Binance Signal Engine V4",
-
-          message:
-            "Binance connection working",
-
-          source: API,
-
-          serverTime:
-            server.serverTime
+          engine: "Binance Signal Engine V5",
+          binance: "CONNECTED",
+          serverTime: time.serverTime,
+          source: API
         });
       }
-
-
-      // PAIRS
 
       if (path === "/pairs") {
-
         return json({
-
           ok: true,
-
-          count:
-            PAIRS.length,
-
-          pairs:
-            PAIRS
+          count: PAIRS.length,
+          pairs: PAIRS
         });
       }
 
-
-      // SIGNAL
-
       if (path === "/signal") {
-
         const symbol =
-          url.searchParams.get("symbol") ||
-          "BTCUSDT";
+          url.searchParams.get("symbol") || "BTCUSDT";
 
-        const result =
-          await analyze(symbol);
+        const result = await analyze(symbol);
 
         return json(
           result,
@@ -752,91 +651,21 @@ export default {
         );
       }
 
-
-      // SCAN
-
       if (path === "/scan") {
-
-        const results = [];
-
-        for (const symbol of PAIRS) {
-
-          try {
-
-            const result =
-              await analyze(symbol);
-
-            results.push(result);
-
-          } catch (error) {
-
-            results.push({
-
-              ok: false,
-
-              symbol,
-
-              error:
-                error.message
-            });
-          }
-        }
-
-        results.sort(
-          (a, b) => {
-
-            const aStrength =
-              Math.abs(
-                a.scores?.difference || 0
-              );
-
-            const bStrength =
-              Math.abs(
-                b.scores?.difference || 0
-              );
-
-            return bStrength - aStrength;
-          }
-        );
-
-        return json({
-
-          ok: true,
-
-          engine:
-            "Binance Signal Engine V4",
-
-          count:
-            results.length,
-
-          results,
-
-          generatedAt:
-            new Date().toISOString()
-        });
+        return json(await scan());
       }
 
+      return json({
+        ok: false,
+        error: "Not found",
+        path
+      }, 404);
 
-      return json(
-        {
-          ok: false,
-          error: "Not found",
-          path
-        },
-        404
-      );
-
-    } catch (error) {
-
-      return json(
-        {
-          ok: false,
-          error:
-            error?.message ||
-            String(error)
-        },
-        500
-      );
+    } catch (e) {
+      return json({
+        ok: false,
+        error: e?.message || String(e)
+      }, 500);
     }
   }
 };
