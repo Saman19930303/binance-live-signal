@@ -650,11 +650,31 @@ export default {
           result.ok ? 200 : 400
         );
       }
-
       if (path === "/scan") {
-        return json(await scan());
-      }
+  const result = await scan();
 
+  // Save each actionable signal for automatic testing
+  if (env.SIGNAL_TEST && result?.signals?.length) {
+    for (const signal of result.signals) {
+      const id =
+        `signal:${Date.now()}:${signal.symbol}:${Math.random()
+          .toString(36)
+          .slice(2, 7)}`;
+
+      await env.SIGNAL_TEST.put(
+        id,
+        JSON.stringify({
+          ...signal,
+          testId: id,
+          status: "PENDING",
+          createdAt: new Date().toISOString()
+        })
+      );
+    }
+  }
+
+  return json(result);
+}
       return json({
         ok: false,
         error: "Not found",
