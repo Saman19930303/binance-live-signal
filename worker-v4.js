@@ -1,6 +1,7 @@
-// Binance Signal Engine V7 — strict signal engine + 20 unique auto-tests
+// Binance Signal Engine V8
+// Strict multi-timeframe signal engine + clean 20-signal auto test
 
-const API = "https://api-gcp.binance.com";
+const API = "https://data-api.binance.vision";
 
 const PAIRS = [
   "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
@@ -8,10 +9,11 @@ const PAIRS = [
 ];
 
 const TEST_TARGET = 20;
-const TEST_STATE_KEY = "signal_test_v7_state";
-const TEST_COOLDOWN_MS = 5 * 60 * 1000;
-const MIN_SIGNAL_STRENGTH = 78;
-const MAX_AUTO_VALIDATIONS_PER_CYCLE = 6;
+const TEST_PREFIX = "v8:test:";
+const TEST_BUCKET_MS = 15 * 60 * 1000;
+const MIN_SIGNAL_STRENGTH = 80;
+const MAX_AUTO_VALIDATIONS_PER_CYCLE = 4;
+const SIGNAL_RR = 1.2;
 
 const CORS = {
   "content-type": "application/json; charset=UTF-8",
@@ -28,164 +30,255 @@ function json(data, status = 200) {
   });
 }
 
-function avg(v) {
-  return v.length ? v.reduce((a,b)=>a+b,0) / v.length : 0;
+function avg(values) {
+  return values.length
+    ? values.reduce((a, b) => a + b, 0) / values.length
+    : 0;
 }
 
-function round(v, d = 8) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Number(n.toFixed(d)) : null;
+function round(value, digits = 8) {
+  if (value === null || value === undefined) return null;
+
+  const n = Number(value);
+
+  return Number.isFinite(n)
+    ? Number(n.toFixed(digits))
+    : null;
 }
 
 async function getJSON(path) {
-  const r = await fetch(API + path, {
+  const response = await fetch(API + path, {
     method: "GET",
-    headers: { Accept: "application/json" }
+    headers: {
+      Accept: "application/json"
+    }
   });
 
-  if (!r.ok) {
-    const body = await r.text().catch(() => "");
+  if (!response.ok) {
+    const body = await response
+      .text()
+      .catch(() => "");
 
     throw new Error(
-      `Binance HTTP ${r.status} ${path}` +
-      (body ? ` - ${body.slice(0,120)}` : "")
+      `Binance HTTP ${response.status} ${path}` +
+      (body ? ` - ${body.slice(0, 120)}` : "")
     );
   }
 
-  return r.json();
+  return response.json();
 }
 
-function ema(v, p) {
-  if (!v || v.length < p) return null;
-
-  let e = avg(v.slice(0,p));
-  const k = 2 / (p + 1);
-
-  for (let i = p; i < v.length; i++) {
-    e = v[i] * k + e * (1-k);
+function ema(values, period) {
+  if (!values || values.length < period) {
+    return null;
   }
 
-  return e;
+  let value =
+    avg(values.slice(0, period));
+
+  const k =
+    2 / (period + 1);
+
+  for (let i = period; i < values.length; i++) {
+    value =
+      values[i] * k +
+      value * (1 - k);
+  }
+
+  return value;
 }
 
-function emaSeries(v, p) {
-  if (!v || v.length < p) return [];
-
-  let e = avg(v.slice(0,p));
-  const k = 2 / (p + 1);
-
-  const out = [e];
-
-  for (let i = p; i < v.length; i++) {
-    e = v[i] * k + e * (1-k);
-    out.push(e);
+function emaSeries(values, period) {
+  if (!values || values.length < period) {
+    return [];
   }
 
-  return out;
+  let value =
+    avg(values.slice(0, period));
+
+  const k =
+    2 / (period + 1);
+
+  const output =
+    [value];
+
+  for (let i = period; i < values.length; i++) {
+    value =
+      values[i] * k +
+      value * (1 - k);
+
+    output.push(value);
+  }
+
+  return output;
 }
 
-function rsi(v, p = 14) {
-  if (!v || v.length <= p) return null;
-
-  let gain = 0;
-  let loss = 0;
-
-  for (let i = 1; i <= p; i++) {
-    const d = v[i] - v[i-1];
-
-    if (d >= 0) gain += d;
-    else loss += Math.abs(d);
+function rsi(values, period = 14) {
+  if (!values || values.length <= period) {
+    return null;
   }
 
-  let ag = gain / p;
-  let al = loss / p;
+  let gains = 0;
+  let losses = 0;
 
-  for (let i = p + 1; i < v.length; i++) {
-    const d = v[i] - v[i-1];
+  for (let i = 1; i <= period; i++) {
+    const diff =
+      values[i] - values[i - 1];
 
-    const g = d > 0 ? d : 0;
-    const l = d < 0 ? Math.abs(d) : 0;
-
-    ag = (ag * (p-1) + g) / p;
-    al = (al * (p-1) + l) / p;
+    if (diff >= 0) {
+      gains += diff;
+    } else {
+      losses += Math.abs(diff);
+    }
   }
 
-  return al === 0
-    ? 100
-    : 100 - (100 / (1 + ag/al));
+  let avgGain =
+    gains / period;
+
+  let avgLoss =
+    losses / period;
+
+  for (let i = period + 1; i < values.length; i++) {
+    const diff =
+      values[i] - values[i - 1];
+
+    const gain =
+      diff > 0 ? diff : 0;
+
+    const loss =
+      diff < 0
+        ? Math.abs(diff)
+        : 0;
+
+    avgGain =
+      ((avgGain * (period - 1)) + gain) /
+      period;
+
+    avgLoss =
+      ((avgLoss * (period - 1)) + loss) /
+      period;
+  }
+
+  if (avgLoss === 0) {
+    return 100;
+  }
+
+  const rs =
+    avgGain / avgLoss;
+
+  return 100 - (100 / (1 + rs));
 }
 
-function macd(v) {
-  const fast = emaSeries(v, 12);
-  const slow = emaSeries(v, 26);
+function macd(values) {
+  const fast =
+    emaSeries(values, 12);
 
-  if (!fast.length || !slow.length) return null;
+  const slow =
+    emaSeries(values, 26);
 
-  const offset = fast.length - slow.length;
+  if (!fast.length || !slow.length) {
+    return null;
+  }
 
-  const line = slow.map(
-    (x,i) => fast[i + offset] - x
-  );
+  const offset =
+    fast.length - slow.length;
 
-  if (line.length < 9) return null;
+  const lineValues =
+    slow.map(
+      (value, index) =>
+        fast[index + offset] - value
+    );
 
-  const signal = ema(line, 9);
-  const current = line.at(-1);
+  if (lineValues.length < 9) {
+    return null;
+  }
+
+  const signal =
+    ema(lineValues, 9);
+
+  const line =
+    lineValues.at(-1);
 
   return {
-    line: current,
+    line,
     signal,
-    histogram: current - signal
+    histogram:
+      line - signal
   };
 }
 
-function atr(rows, p = 14) {
-  if (!rows || rows.length < p + 1) return null;
+function atr(rows, period = 14) {
+  if (!rows || rows.length < period + 1) {
+    return null;
+  }
 
-  const tr = [];
+  const ranges = [];
 
   for (let i = 1; i < rows.length; i++) {
-    const h = +rows[i][2];
-    const l = +rows[i][3];
-    const prevClose = +rows[i-1][4];
+    const high =
+      Number(rows[i][2]);
 
-    tr.push(
+    const low =
+      Number(rows[i][3]);
+
+    const previousClose =
+      Number(rows[i - 1][4]);
+
+    ranges.push(
       Math.max(
-        h-l,
-        Math.abs(h-prevClose),
-        Math.abs(l-prevClose)
+        high - low,
+        Math.abs(high - previousClose),
+        Math.abs(low - previousClose)
       )
     );
   }
 
-  return ema(tr, p);
+  return ema(ranges, period);
 }
 
 function volumeRatio(rows) {
-  if (!rows || rows.length < 21) return null;
+  if (!rows || rows.length < 21) {
+    return null;
+  }
 
-  const volumes = rows.map(r => +r[5]);
+  const volumes =
+    rows.map(
+      row => Number(row[5])
+    );
 
-  const current = volumes.at(-1);
-  const base = avg(volumes.slice(-21,-1));
+  const current =
+    volumes.at(-1);
+
+  const base =
+    avg(
+      volumes.slice(-21, -1)
+    );
 
   return base > 0
     ? current / base
     : 0;
 }
 
-function vwap(rows, n = 60) {
+function vwap(rows, count = 60) {
   let priceVolume = 0;
   let volume = 0;
 
-  for (const r of rows.slice(-n)) {
+  for (const row of rows.slice(-count)) {
     const typical =
-      (+r[2] + +r[3] + +r[4]) / 3;
+      (
+        Number(row[2]) +
+        Number(row[3]) +
+        Number(row[4])
+      ) / 3;
 
-    const vol = +r[5];
+    const candleVolume =
+      Number(row[5]);
 
-    priceVolume += typical * vol;
-    volume += vol;
+    priceVolume +=
+      typical * candleVolume;
+
+    volume +=
+      candleVolume;
   }
 
   return volume
@@ -193,15 +286,23 @@ function vwap(rows, n = 60) {
     : null;
 }
 
-function std(v, p = 20) {
-  if (!v || v.length < p) return null;
+function std(values, period = 20) {
+  if (!values || values.length < period) {
+    return null;
+  }
 
-  const x = v.slice(-p);
-  const mean = avg(x);
+  const sample =
+    values.slice(-period);
+
+  const mean =
+    avg(sample);
 
   return Math.sqrt(
     avg(
-      x.map(n => (n - mean) ** 2)
+      sample.map(
+        value =>
+          (value - mean) ** 2
+      )
     )
   );
 }
@@ -211,22 +312,42 @@ function marketStructure(rows) {
     return "RANGE";
   }
 
-  const recent = rows.slice(-12);
+  const recent =
+    rows.slice(-12);
 
-  const first = recent.slice(0,6);
-  const second = recent.slice(6);
+  const first =
+    recent.slice(0, 6);
+
+  const second =
+    recent.slice(6);
 
   const firstHigh =
-    Math.max(...first.map(r => +r[2]));
+    Math.max(
+      ...first.map(
+        row => Number(row[2])
+      )
+    );
 
   const firstLow =
-    Math.min(...first.map(r => +r[3]));
+    Math.min(
+      ...first.map(
+        row => Number(row[3])
+      )
+    );
 
   const secondHigh =
-    Math.max(...second.map(r => +r[2]));
+    Math.max(
+      ...second.map(
+        row => Number(row[2])
+      )
+    );
 
   const secondLow =
-    Math.min(...second.map(r => +r[3]));
+    Math.min(
+      ...second.map(
+        row => Number(row[3])
+      )
+    );
 
   if (
     secondHigh > firstHigh &&
@@ -246,23 +367,32 @@ function marketStructure(rows) {
 }
 
 function supportResistance(rows) {
-  const recent = rows.slice(-50);
+  const recent =
+    rows.slice(-50);
 
   return {
     support:
-      Math.min(...recent.map(r => +r[3])),
+      Math.min(
+        ...recent.map(
+          row => Number(row[3])
+        )
+      ),
 
     resistance:
-      Math.max(...recent.map(r => +r[2]))
+      Math.max(
+        ...recent.map(
+          row => Number(row[2])
+        )
+      )
   };
 }
 
-function orderBook(book) {
+function analyzeOrderBook(book) {
   const bids =
-    (book.bids || []).slice(0,20);
+    (book.bids || []).slice(0, 20);
 
   const asks =
-    (book.asks || []).slice(0,20);
+    (book.asks || []).slice(0, 20);
 
   if (!bids.length || !asks.length) {
     return {
@@ -274,23 +404,33 @@ function orderBook(book) {
 
   const bidNotional =
     bids.reduce(
-      (sum,r) =>
-        sum + (+r[0]) * (+r[1]),
+      (sum, row) =>
+        sum +
+        Number(row[0]) *
+        Number(row[1]),
       0
     );
 
   const askNotional =
     asks.reduce(
-      (sum,r) =>
-        sum + (+r[0]) * (+r[1]),
+      (sum, row) =>
+        sum +
+        Number(row[0]) *
+        Number(row[1]),
       0
     );
 
-  const bestBid = +bids[0][0];
-  const bestAsk = +asks[0][0];
+  const bestBid =
+    Number(bids[0][0]);
 
-  const bidQty = +bids[0][1];
-  const askQty = +asks[0][1];
+  const bestAsk =
+    Number(asks[0][0]);
+
+  const bidQty =
+    Number(bids[0][1]);
+
+  const askQty =
+    Number(asks[0][1]);
 
   const mid =
     (bestBid + bestAsk) / 2;
@@ -306,25 +446,44 @@ function orderBook(book) {
     imbalance:
       bidNotional + askNotional
         ? (
-            (bidNotional - askNotional) /
-            (bidNotional + askNotional)
+            (
+              bidNotional -
+              askNotional
+            ) /
+            (
+              bidNotional +
+              askNotional
+            )
           ) * 100
         : 0,
 
     spreadBps:
       mid
-        ? ((bestAsk - bestBid) / mid) * 10000
+        ? (
+            (
+              bestAsk -
+              bestBid
+            ) /
+            mid
+          ) * 10000
         : 999,
 
     microBiasBps:
       mid
-        ? ((microPrice - mid) / mid) * 10000
+        ? (
+            (
+              microPrice -
+              mid
+            ) /
+            mid
+          ) * 10000
         : 0
   };
 }
 
-function tradeFlow(trades) {
-  const now = Date.now();
+function analyzeTradeFlow(trades) {
+  const now =
+    Date.now();
 
   let buy15 = 0;
   let sell15 = 0;
@@ -335,26 +494,34 @@ function tradeFlow(trades) {
   let count15 = 0;
   let count30 = 0;
 
-  for (const t of trades) {
+  for (const trade of trades) {
     const age =
-      now - Number(t.T);
+      now - Number(trade.T);
 
-    if (age > 30000) continue;
+    if (age > 30000) {
+      continue;
+    }
 
     const notional =
-      Number(t.p) *
-      Number(t.q);
+      Number(trade.p) *
+      Number(trade.q);
 
     count30++;
 
-    if (t.m) sell30 += notional;
-    else buy30 += notional;
+    if (trade.m) {
+      sell30 += notional;
+    } else {
+      buy30 += notional;
+    }
 
     if (age <= 15000) {
       count15++;
 
-      if (t.m) sell15 += notional;
-      else buy15 += notional;
+      if (trade.m) {
+        sell15 += notional;
+      } else {
+        buy15 += notional;
+      }
     }
   }
 
@@ -367,12 +534,24 @@ function tradeFlow(trades) {
   return {
     flow15:
       total15
-        ? ((buy15 - sell15) / total15) * 100
+        ? (
+            (
+              buy15 -
+              sell15
+            ) /
+            total15
+          ) * 100
         : 0,
 
     flow30:
       total30
-        ? ((buy30 - sell30) / total30) * 100
+        ? (
+            (
+              buy30 -
+              sell30
+            ) /
+            total30
+          ) * 100
         : 0,
 
     count15,
@@ -398,11 +577,11 @@ async function analyze(symbol) {
   const [raw1m, raw5m] =
     await Promise.all([
       getJSON(
-        `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&limit=210`
+        `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=1m&limit=205`
       ),
 
       getJSON(
-        `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=5m&limit=120`
+        `/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=5m&limit=80`
       )
     ]);
 
@@ -410,39 +589,36 @@ async function analyze(symbol) {
     !Array.isArray(raw1m) ||
     !Array.isArray(raw5m) ||
     raw1m.length < 201 ||
-    raw5m.length < 60
+    raw5m.length < 55
   ) {
     throw new Error(
       "Not enough Binance candle data"
     );
   }
 
-  // Closed candles for indicators
+  // Indicators only use closed candles.
   const candles1m =
-    raw1m.slice(0,-1);
+    raw1m.slice(0, -1);
 
   const candles5m =
-    raw5m.slice(0,-1);
+    raw5m.slice(0, -1);
 
   const closes1m =
-    candles1m.map(r => +r[4]);
+    candles1m.map(
+      row => Number(row[4])
+    );
 
   const closes5m =
-    candles5m.map(r => +r[4]);
+    candles5m.map(
+      row => Number(row[4])
+    );
 
-  // Current forming-candle price used as entry reference
+  // Current kline close is only used as live entry reference.
   const livePrice =
-    +raw1m.at(-1)[4];
+    Number(raw1m.at(-1)[4]);
 
   const closedPrice =
     closes1m.at(-1);
-
-  const lastClosed1m =
-    +candles1m.at(-1)[6];
-
-  const lastClosed5m =
-    +candles5m.at(-1)[6];
-
 
   const EMA9 =
     ema(closes1m, 9);
@@ -456,10 +632,10 @@ async function analyze(symbol) {
   const EMA200 =
     ema(closes1m, 200);
 
-  const RSI =
+  const RSI1 =
     rsi(closes1m, 14);
 
-  const MACD =
+  const MACD1 =
     macd(closes1m);
 
   const ATR =
@@ -471,28 +647,32 @@ async function analyze(symbol) {
   const VWAP =
     vwap(candles1m, 60);
 
-  const middle =
-    avg(closes1m.slice(-20));
-
-  const deviation =
-    std(closes1m, 20);
-
-  const Bollinger = {
-    lower:
-      middle - 2 * deviation,
-
-    middle,
-
-    upper:
-      middle + 2 * deviation
-  };
-
   const structure =
     marketStructure(candles1m);
 
   const SR =
     supportResistance(candles1m);
 
+  const BBMiddle =
+    avg(
+      closes1m.slice(-20)
+    );
+
+  const BBDeviation =
+    std(closes1m, 20);
+
+  const Bollinger = {
+    lower:
+      BBMiddle -
+      2 * BBDeviation,
+
+    middle:
+      BBMiddle,
+
+    upper:
+      BBMiddle +
+      2 * BBDeviation
+  };
 
   const EMA9_5 =
     ema(closes5m, 9);
@@ -509,18 +689,18 @@ async function analyze(symbol) {
   const MACD5 =
     macd(closes5m);
 
-
   const trend5 =
     EMA9_5 > EMA21_5 &&
     EMA21_5 > EMA50_5
+
       ? "BULLISH"
 
       : EMA9_5 < EMA21_5 &&
         EMA21_5 < EMA50_5
+
       ? "BEARISH"
 
       : "MIXED";
-
 
   let bullishScore = 0;
   let bearishScore = 0;
@@ -528,25 +708,23 @@ async function analyze(symbol) {
   const bullish = [];
   const bearish = [];
 
-
   function score(
-    bullCondition,
-    bearCondition,
+    bullishCondition,
+    bearishCondition,
     points,
-    bullText,
-    bearText
+    bullishText,
+    bearishText
   ) {
-    if (bullCondition) {
+    if (bullishCondition) {
       bullishScore += points;
-      bullish.push(bullText);
+      bullish.push(bullishText);
     }
 
-    else if (bearCondition) {
+    else if (bearishCondition) {
       bearishScore += points;
-      bearish.push(bearText);
+      bearish.push(bearishText);
     }
   }
-
 
   score(
     EMA9 > EMA21,
@@ -556,7 +734,6 @@ async function analyze(symbol) {
     "1m EMA9 < EMA21"
   );
 
-
   score(
     EMA50 > EMA200,
     EMA50 < EMA200,
@@ -565,13 +742,12 @@ async function analyze(symbol) {
     "EMA50 < EMA200"
   );
 
-
   score(
     livePrice > EMA21 &&
-      livePrice > EMA50,
+    livePrice > EMA50,
 
     livePrice < EMA21 &&
-      livePrice < EMA50,
+    livePrice < EMA50,
 
     8,
 
@@ -580,13 +756,12 @@ async function analyze(symbol) {
     "Price below EMA21/50"
   );
 
-
   score(
-    RSI >= 52 &&
-      RSI <= 66,
+    RSI1 >= 52 &&
+    RSI1 <= 67,
 
-    RSI <= 48 &&
-      RSI >= 34,
+    RSI1 <= 48 &&
+    RSI1 >= 33,
 
     10,
 
@@ -595,14 +770,13 @@ async function analyze(symbol) {
     "1m RSI bearish"
   );
 
-
-  if (MACD) {
+  if (MACD1) {
     score(
-      MACD.histogram > 0 &&
-        MACD.line > MACD.signal,
+      MACD1.histogram > 0 &&
+      MACD1.line > MACD1.signal,
 
-      MACD.histogram < 0 &&
-        MACD.line < MACD.signal,
+      MACD1.histogram < 0 &&
+      MACD1.line < MACD1.signal,
 
       10,
 
@@ -612,7 +786,6 @@ async function analyze(symbol) {
     );
   }
 
-
   score(
     livePrice > VWAP,
     livePrice < VWAP,
@@ -620,7 +793,6 @@ async function analyze(symbol) {
     "Price above VWAP",
     "Price below VWAP"
   );
-
 
   score(
     structure === "BULLISH",
@@ -630,7 +802,6 @@ async function analyze(symbol) {
     "Bearish market structure"
   );
 
-
   score(
     trend5 === "BULLISH",
     trend5 === "BEARISH",
@@ -639,13 +810,12 @@ async function analyze(symbol) {
     "5m trend bearish"
   );
 
-
   score(
     RSI5 >= 52 &&
-      RSI5 <= 68,
+    RSI5 <= 69,
 
     RSI5 <= 48 &&
-      RSI5 >= 32,
+    RSI5 >= 31,
 
     8,
 
@@ -653,7 +823,6 @@ async function analyze(symbol) {
 
     "5m RSI bearish"
   );
-
 
   if (MACD5) {
     score(
@@ -665,7 +834,6 @@ async function analyze(symbol) {
     );
   }
 
-
   score(
     livePrice > Bollinger.middle,
     livePrice < Bollinger.middle,
@@ -674,8 +842,11 @@ async function analyze(symbol) {
     "Below Bollinger mid"
   );
 
-
-  if (VR >= 1) {
+  if (
+    VR !== null &&
+    VR >= 0.9 &&
+    VR <= 3.5
+  ) {
     if (
       bullishScore >
       bearishScore
@@ -683,7 +854,7 @@ async function analyze(symbol) {
       bullishScore += 6;
 
       bullish.push(
-        "Closed-candle volume confirms bullish move"
+        "Volume supports bullish move"
       );
     }
 
@@ -694,11 +865,10 @@ async function analyze(symbol) {
       bearishScore += 6;
 
       bearish.push(
-        "Closed-candle volume confirms bearish move"
+        "Volume supports bearish move"
       );
     }
   }
-
 
   bullishScore =
     Math.min(
@@ -712,13 +882,20 @@ async function analyze(symbol) {
       bearishScore
     );
 
-
   const mainUp =
     EMA50 > EMA200;
 
   const mainDown =
     EMA50 < EMA200;
 
+  const volumeOK =
+    VR !== null &&
+    VR >= 0.55 &&
+    VR <= 4.0;
+
+  const volatilityOK =
+    Boolean(ATR) &&
+    ATR / livePrice >= 0.00010;
 
   const roomToResistanceATR =
     ATR
@@ -726,8 +903,7 @@ async function analyze(symbol) {
           SR.resistance -
           livePrice
         ) / ATR
-      : 0;
-
+      : null;
 
   const roomToSupportATR =
     ATR
@@ -735,39 +911,22 @@ async function analyze(symbol) {
           livePrice -
           SR.support
         ) / ATR
-      : 0;
-
-
-  const volatilityOK =
-    Boolean(ATR) &&
-    ATR / livePrice >= 0.00012;
-
-
-  /*
-    Major fix:
-    TRX/DOGE/ADA weak-volume entries seen in V6
-    will be rejected below this threshold.
-  */
-
-  const volumeOK =
-    VR >= 0.60 &&
-    VR <= 3.5;
-
+      : null;
 
   const preBuy =
-    bullishScore >= 74 &&
+    bullishScore >= 76 &&
 
     bullishScore >=
-      bearishScore + 30 &&
+      bearishScore + 28 &&
 
     mainUp &&
 
     trend5 === "BULLISH" &&
 
-    RSI >= 52 &&
-    RSI <= 66 &&
+    RSI1 >= 52 &&
+    RSI1 <= 67 &&
 
-    MACD?.histogram > 0 &&
+    MACD1?.histogram > 0 &&
 
     MACD5?.histogram > 0 &&
 
@@ -782,23 +941,23 @@ async function analyze(symbol) {
 
     volatilityOK &&
 
-    roomToResistanceATR >= 1.7;
-
+    roomToResistanceATR !== null &&
+    roomToResistanceATR >= 1.4;
 
   const preSell =
-    bearishScore >= 74 &&
+    bearishScore >= 76 &&
 
     bearishScore >=
-      bullishScore + 30 &&
+      bullishScore + 28 &&
 
     mainDown &&
 
     trend5 === "BEARISH" &&
 
-    RSI <= 48 &&
-    RSI >= 34 &&
+    RSI1 <= 48 &&
+    RSI1 >= 33 &&
 
-    MACD?.histogram < 0 &&
+    MACD1?.histogram < 0 &&
 
     MACD5?.histogram < 0 &&
 
@@ -813,24 +972,19 @@ async function analyze(symbol) {
 
     volatilityOK &&
 
-    roomToSupportATR >= 1.7;
+    roomToSupportATR !== null &&
+    roomToSupportATR >= 1.4;
 
-
-  let OB = null;
-  let TF = null;
+  let orderBookData = null;
+  let tradeFlowData = null;
 
   let signal =
     "WAIT";
 
-
   /*
-    Microstructure requests are made ONLY after
+    Extra depth/trade requests happen only after
     candle-based prequalification.
-
-    This keeps /scan under the Cloudflare Free
-    external-subrequest ceiling.
   */
-
   if (
     preBuy ||
     preSell
@@ -849,78 +1003,72 @@ async function analyze(symbol) {
         )
       ]);
 
+    orderBookData =
+      analyzeOrderBook(depth);
 
-    OB =
-      orderBook(depth);
-
-    TF =
-      tradeFlow(trades);
-
+    tradeFlowData =
+      analyzeTradeFlow(trades);
 
     if (
       preBuy &&
 
-      OB.spreadBps < 3 &&
+      orderBookData.spreadBps < 3 &&
 
-      OB.imbalance > -15 &&
+      orderBookData.imbalance > -12 &&
 
-      OB.microBiasBps >
-        -0.08 &&
+      orderBookData.microBiasBps > -0.08 &&
 
-      TF.flow15 > 0 &&
+      tradeFlowData.flow15 > 0 &&
 
-      TF.flow30 > -5
+      tradeFlowData.flow30 > -5
     ) {
       signal =
         "BUY";
 
       if (
-        OB.imbalance >= 8
+        orderBookData.imbalance >= 8
       ) {
         bullishScore += 4;
       }
 
       if (
-        TF.flow15 >= 10 &&
-        TF.flow30 >= 5
+        tradeFlowData.flow15 >= 10 &&
+        tradeFlowData.flow30 >= 5
       ) {
         bullishScore += 6;
       }
     }
 
-
     if (
       preSell &&
 
-      OB.spreadBps < 3 &&
+      orderBookData.spreadBps < 3 &&
 
-      OB.imbalance < 15 &&
+      orderBookData.imbalance < 12 &&
 
-      OB.microBiasBps <
-        0.08 &&
+      orderBookData.microBiasBps < 0.08 &&
 
-      TF.flow15 < 0 &&
+      tradeFlowData.flow15 < 0 &&
 
-      TF.flow30 < 5
+      tradeFlowData.flow30 < 5
     ) {
       signal =
         "SELL";
 
       if (
-        OB.imbalance <= -8
+        orderBookData.imbalance <= -8
       ) {
         bearishScore += 4;
       }
 
       if (
-        TF.flow15 <= -10 &&
-        TF.flow30 <= -5
+        tradeFlowData.flow15 <= -10 &&
+        tradeFlowData.flow30 <= -5
       ) {
         bearishScore += 6;
       }
     }
   }
-
 
   bullishScore =
     Math.min(
@@ -934,27 +1082,26 @@ async function analyze(symbol) {
       bearishScore
     );
 
-
   const signalStrength =
     signal === "BUY"
+
       ? bullishScore
 
       : signal === "SELL"
+
       ? bearishScore
 
       : Math.min(
-          77,
+          79,
           Math.max(
             bullishScore,
             bearishScore
           )
         );
 
-
   let entry = null;
   let tp = null;
   let sl = null;
-
 
   if (
     signal !== "WAIT" &&
@@ -963,31 +1110,22 @@ async function analyze(symbol) {
     entry =
       livePrice;
 
-
-    /*
-      1.2R target used for initial clean test.
-      We will tune this only AFTER actual data.
-    */
-
     if (
       signal === "BUY"
     ) {
       tp =
         entry +
-        ATR * 1.2;
+        ATR * SIGNAL_RR;
 
       sl =
         entry -
         ATR;
     }
 
-
-    if (
-      signal === "SELL"
-    ) {
+    else {
       tp =
         entry -
-        ATR * 1.2;
+        ATR * SIGNAL_RR;
 
       sl =
         entry +
@@ -995,12 +1133,70 @@ async function analyze(symbol) {
     }
   }
 
+  const blockers = [];
+
+  if (!volumeOK) {
+    blockers.push(
+      "Volume filter failed"
+    );
+  }
+
+  if (!volatilityOK) {
+    blockers.push(
+      "Volatility filter failed"
+    );
+  }
+
+  if (
+    signal === "WAIT" &&
+    trend5 === "MIXED"
+  ) {
+    blockers.push(
+      "5m trend mixed"
+    );
+  }
+
+  if (
+    signal === "WAIT" &&
+    roomToResistanceATR !== null &&
+    roomToResistanceATR < 1.4 &&
+    bullishScore > bearishScore
+  ) {
+    blockers.push(
+      "Not enough room to resistance"
+    );
+  }
+
+  if (
+    signal === "WAIT" &&
+    roomToSupportATR !== null &&
+    roomToSupportATR < 1.4 &&
+    bearishScore > bullishScore
+  ) {
+    blockers.push(
+      "Not enough room to support"
+    );
+  }
+
+  if (
+    signal === "WAIT" &&
+    (
+      preBuy ||
+      preSell
+    ) &&
+    orderBookData &&
+    tradeFlowData
+  ) {
+    blockers.push(
+      "Microstructure confirmation failed"
+    );
+  }
 
   return {
     ok: true,
 
     engine:
-      "Binance Signal Engine V7",
+      "Binance Signal Engine V8",
 
     symbol,
 
@@ -1038,7 +1234,7 @@ async function analyze(symbol) {
       riskReward:
         signal === "WAIT"
           ? null
-          : 1.2
+          : SIGNAL_RR
     },
 
     scores: {
@@ -1079,10 +1275,10 @@ async function analyze(symbol) {
 
     indicators: {
       rsi1m:
-        round(RSI,2),
+        round(RSI1, 2),
 
       rsi5m:
-        round(RSI5,2),
+        round(RSI5, 2),
 
       ema9:
         round(EMA9),
@@ -1097,9 +1293,9 @@ async function analyze(symbol) {
         round(EMA200),
 
       macd1mHistogram:
-        MACD
+        MACD1
           ? round(
-              MACD.histogram
+              MACD1.histogram
             )
           : null,
 
@@ -1114,7 +1310,7 @@ async function analyze(symbol) {
         round(ATR),
 
       closedCandleVolumeRatio:
-        round(VR,2),
+        round(VR, 2),
 
       vwap:
         round(VWAP),
@@ -1160,44 +1356,47 @@ async function analyze(symbol) {
     },
 
     microstructure:
-      OB && TF
+      orderBookData &&
+      tradeFlowData
+
         ? {
             orderBookImbalance:
               round(
-                OB.imbalance,
+                orderBookData.imbalance,
                 2
               ),
 
             spreadBps:
               round(
-                OB.spreadBps,
+                orderBookData.spreadBps,
                 4
               ),
 
             micropriceBiasBps:
               round(
-                OB.microBiasBps,
+                orderBookData.microBiasBps,
                 4
               ),
 
             tradeFlow15s:
               round(
-                TF.flow15,
+                tradeFlowData.flow15,
                 2
               ),
 
             tradeFlow30s:
               round(
-                TF.flow30,
+                tradeFlowData.flow30,
                 2
               ),
 
             recentTrades15s:
-              TF.count15,
+              tradeFlowData.count15,
 
             recentTrades30s:
-              TF.count30
+              tradeFlowData.count30
           }
+
         : null,
 
     confirmations: {
@@ -1212,91 +1411,116 @@ async function analyze(symbol) {
       preSell
     },
 
+    blockers,
+
     candle: {
       dataType:
         "CLOSED_CANDLES_FOR_INDICATORS",
 
       lastClosed1m:
         new Date(
-          lastClosed1m
+          Number(
+            candles1m.at(-1)[6]
+          )
         ).toISOString(),
 
       lastClosed5m:
         new Date(
-          lastClosed5m
+          Number(
+            candles5m.at(-1)[6]
+          )
         ).toISOString()
     },
 
     generatedAt:
-      new Date()
-        .toISOString(),
+      new Date().toISOString(),
 
     warning:
       "Market-analysis signal only. Test results do not guarantee future trading performance."
   };
 }
 
-
-// ======================================================
-// MARKET SCAN
-// ======================================================
-
 async function scan() {
-  const results =
-    await Promise.all(
-      PAIRS.map(
-        async symbol => {
-          try {
-            return await analyze(
-              symbol
-            );
-          }
+  const results = [];
 
-          catch (error) {
-            return {
-              ok: false,
-              symbol,
-              signal: "ERROR",
-              error:
-                error?.message ||
-                String(error)
-            };
+  /*
+    3 symbols per batch.
+    3 × 2 initial requests = maximum 6 simultaneous
+    outgoing connections.
+  */
+  for (
+    let i = 0;
+    i < PAIRS.length;
+    i += 3
+  ) {
+    const batch =
+      PAIRS.slice(
+        i,
+        i + 3
+      );
+
+    const batchResults =
+      await Promise.all(
+        batch.map(
+          async symbol => {
+            try {
+              return await analyze(
+                symbol
+              );
+            }
+
+            catch (error) {
+              return {
+                ok: false,
+
+                symbol,
+
+                signal:
+                  "ERROR",
+
+                error:
+                  error?.message ||
+                  String(error)
+              };
+            }
           }
-        }
-      )
+        )
+      );
+
+    results.push(
+      ...batchResults
     );
-
+  }
 
   const signals =
     results
       .filter(
-        x =>
-          x.ok &&
+        result =>
+          result.ok &&
 
           (
-            x.signal ===
+            result.signal ===
               "BUY" ||
 
-            x.signal ===
+            result.signal ===
               "SELL"
           ) &&
 
-          x.signalStrength >=
+          result.signalStrength >=
             MIN_SIGNAL_STRENGTH
       )
 
       .sort(
-        (a,b) =>
+        (a, b) =>
           b.signalStrength -
           a.signalStrength
       );
-
 
   return {
     ok: true,
 
     engine:
-      "Binance Signal Engine V7",
+      "Binance Signal Engine V8",
 
     pairsChecked:
       PAIRS.length,
@@ -1310,112 +1534,108 @@ async function scan() {
       results,
 
     generatedAt:
-      new Date()
-        .toISOString()
+      new Date().toISOString()
   };
 }
 
-
-// ======================================================
-// V7 TEST STATE
-// ======================================================
-
-function emptyState() {
-  return {
-    version: 7,
-
-    target:
-      TEST_TARGET,
-
-    records: [],
-
-    createdAt:
-      new Date()
-        .toISOString(),
-
-    updatedAt:
-      new Date()
-        .toISOString()
-  };
-}
-
-
-async function loadState(env) {
+async function listTests(env) {
   if (!env?.SIGNAL_TEST) {
     throw new Error(
       "SIGNAL_TEST KV binding not found"
     );
   }
 
+  const listing =
+    await env.SIGNAL_TEST.list({
+      prefix:
+        TEST_PREFIX
+    });
 
-  const state =
-    await env.SIGNAL_TEST.get(
-      TEST_STATE_KEY,
-      "json"
-    );
+  const records = [];
 
-
-  if (
-    !state ||
-    state.version !== 7 ||
-    !Array.isArray(
-      state.records
+  for (
+    const key of
+    listing.keys.slice(
+      0,
+      TEST_TARGET + 10
     )
   ) {
-    return emptyState();
+    const record =
+      await env.SIGNAL_TEST.get(
+        key.name,
+        "json"
+      );
+
+    if (record) {
+      records.push(record);
+    }
   }
 
+  records.sort(
+    (a, b) =>
+      new Date(a.createdAt) -
+      new Date(b.createdAt)
+  );
 
-  return state;
+  return records;
 }
 
+function makeTestId(signal) {
+  const candleMs =
+    new Date(
+      signal.candle
+        .lastClosed1m
+    ).getTime();
 
-async function saveState(
-  env,
-  state
-) {
-  state.updatedAt =
-    new Date()
-      .toISOString();
+  const bucket =
+    Math.floor(
+      candleMs /
+      TEST_BUCKET_MS
+    );
 
-
-  await env.SIGNAL_TEST.put(
-    TEST_STATE_KEY,
-    JSON.stringify(state)
+  return (
+    `${TEST_PREFIX}` +
+    `${signal.symbol}:` +
+    `${signal.signal}:` +
+    `${bucket}`
   );
 }
 
-
-// ======================================================
-// UNIQUE TEST COLLECTION
-// ======================================================
-
-function addSignalsToState(
-  state,
+async function saveSignalsForTest(
+  env,
   signals
 ) {
-  if (
-    state.records.length >=
-    TEST_TARGET
-  ) {
-    return 0;
+  if (!env?.SIGNAL_TEST) {
+    return {
+      added: 0,
+      total: 0
+    };
   }
 
+  const existing =
+    await listTests(env);
+
+  if (
+    existing.length >=
+    TEST_TARGET
+  ) {
+    return {
+      added: 0,
+      total:
+        existing.length
+    };
+  }
 
   let added = 0;
 
-
-  for (
-    const signal of
-    signals
-  ) {
+  for (const signal of signals) {
     if (
-      state.records.length >=
+      existing.length +
+      added >=
       TEST_TARGET
     ) {
       break;
     }
-
 
     if (
       !signal?.ok ||
@@ -1428,71 +1648,34 @@ function addSignalsToState(
       ) ||
 
       signal.signalStrength <
-        MIN_SIGNAL_STRENGTH ||
-
-      signal.trade?.entry ==
-        null ||
-
-      signal.trade?.tp ==
-        null ||
-
-      signal.trade?.sl ==
-        null
+        MIN_SIGNAL_STRENGTH
     ) {
       continue;
     }
 
-
-    /*
-      One active setup per pair.
-    */
-
     const activeSameSymbol =
-      state.records.some(
+      existing.some(
         record =>
           record.symbol ===
             signal.symbol &&
 
-          record.status ===
+          [
+            "ARMED",
             "PENDING"
+          ].includes(
+            record.status
+          )
       );
 
-
-    if (
-      activeSameSymbol
-    ) {
+    if (activeSameSymbol) {
       continue;
     }
 
-
-    /*
-      Deterministic 5-minute bucket.
-
-      Even if two Worker invocations happen
-      close together, the same symbol/direction/
-      time bucket cannot become two test IDs.
-    */
-
-    const candleTime =
-      new Date(
-        signal.candle
-          .lastClosed1m
-      ).getTime();
-
-
-    const bucket =
-      Math.floor(
-        candleTime /
-        TEST_COOLDOWN_MS
-      );
-
-
     const testId =
-      `v7:${signal.symbol}:${signal.signal}:${bucket}`;
-
+      makeTestId(signal);
 
     if (
-      state.records.some(
+      existing.some(
         record =>
           record.testId ===
           testId
@@ -1501,45 +1684,20 @@ function addSignalsToState(
       continue;
     }
 
+    const createdMs =
+      Date.now();
 
-    const recentSame =
-      state.records.some(
-        record => {
+    /*
+      Test begins at the NEXT complete 1m candle.
+      This removes pre-signal intraminute contamination.
+    */
+    const armTime =
+      Math.ceil(
+        createdMs /
+        60000
+      ) * 60000;
 
-          if (
-            record.symbol !==
-              signal.symbol ||
-
-            record.signal !==
-              signal.signal
-          ) {
-            return false;
-          }
-
-
-          const age =
-            Date.now() -
-            new Date(
-              record.createdAt
-            ).getTime();
-
-
-          return (
-            age <
-            TEST_COOLDOWN_MS
-          );
-        }
-      );
-
-
-    if (
-      recentSame
-    ) {
-      continue;
-    }
-
-
-    state.records.push({
+    const record = {
       testId,
 
       symbol:
@@ -1551,34 +1709,49 @@ function addSignalsToState(
       strength:
         signal.signalStrength,
 
-      entry:
+      atrAtSignal:
+        Number(
+          signal.indicators
+            .atr14
+        ),
+
+      suggestedEntry:
         Number(
           signal.trade.entry
         ),
 
-      tp:
+      suggestedTp:
         Number(
           signal.trade.tp
         ),
 
-      sl:
+      suggestedSl:
         Number(
           signal.trade.sl
         ),
 
-      sourceCandleClose:
-        signal.candle
-          .lastClosed1m,
+      entry: null,
+      tp: null,
+      sl: null,
+
+      riskReward:
+        SIGNAL_RR,
 
       status:
-        "PENDING",
+        "ARMED",
 
       result:
         null,
 
       createdAt:
-        new Date()
-          .toISOString(),
+        new Date(
+          createdMs
+        ).toISOString(),
+
+      armTime:
+        new Date(
+          armTime
+        ).toISOString(),
 
       resolvedAt:
         null,
@@ -1588,43 +1761,57 @@ function addSignalsToState(
 
       resolution:
         null
-    });
+    };
 
+    await env.SIGNAL_TEST.put(
+      testId,
+      JSON.stringify(record)
+    );
+
+    existing.push(record);
 
     added++;
   }
 
+  return {
+    added,
 
-  return added;
+    total:
+      existing.length
+  };
 }
 
-
-// ======================================================
-// TEST VALIDATION
-// ======================================================
-
 async function validateRecord(
+  env,
   record
 ) {
   if (
-    record.status !==
-    "PENDING"
+    ![
+      "ARMED",
+      "PENDING"
+    ].includes(
+      record.status
+    )
   ) {
     return false;
   }
 
-
-  const startTime =
+  const armMs =
     new Date(
-      record.createdAt
+      record.armTime
     ).getTime();
 
+  if (
+    Date.now() <
+    armMs + 1000
+  ) {
+    return false;
+  }
 
   const rows =
     await getJSON(
-      `/api/v3/klines?symbol=${encodeURIComponent(record.symbol)}&interval=1m&startTime=${startTime}&limit=1000`
+      `/api/v3/klines?symbol=${encodeURIComponent(record.symbol)}&interval=1m&startTime=${armMs}&limit=1000`
     );
-
 
   if (
     !Array.isArray(rows) ||
@@ -1633,11 +1820,83 @@ async function validateRecord(
     return false;
   }
 
+  let changed =
+    false;
 
-  for (
-    const row of
-    rows
+  if (
+    record.status ===
+    "ARMED"
   ) {
+    const firstOpen =
+      Number(
+        rows[0][1]
+      );
+
+    const atrValue =
+      Number(
+        record.atrAtSignal
+      );
+
+    if (
+      !Number.isFinite(
+        firstOpen
+      ) ||
+
+      !Number.isFinite(
+        atrValue
+      ) ||
+
+      atrValue <= 0
+    ) {
+      return false;
+    }
+
+    record.entry =
+      firstOpen;
+
+    if (
+      record.signal ===
+      "BUY"
+    ) {
+      record.tp =
+        firstOpen +
+        atrValue *
+        SIGNAL_RR;
+
+      record.sl =
+        firstOpen -
+        atrValue;
+    }
+
+    else {
+      record.tp =
+        firstOpen -
+        atrValue *
+        SIGNAL_RR;
+
+      record.sl =
+        firstOpen +
+        atrValue;
+    }
+
+    record.status =
+      "PENDING";
+
+    changed =
+      true;
+  }
+
+  for (const row of rows) {
+    const openTime =
+      Number(row[0]);
+
+    if (
+      openTime <
+      armMs
+    ) {
+      continue;
+    }
+
     const high =
       Number(row[2]);
 
@@ -1650,13 +1909,8 @@ async function validateRecord(
     const candleClose =
       Number(row[6]);
 
-
-    let tpHit =
-      false;
-
-    let slHit =
-      false;
-
+    let tpHit = false;
+    let slHit = false;
 
     if (
       record.signal ===
@@ -1671,7 +1925,6 @@ async function validateRecord(
         record.sl;
     }
 
-
     else {
       tpHit =
         low <=
@@ -1681,7 +1934,6 @@ async function validateRecord(
         high >=
         record.sl;
     }
-
 
     if (
       tpHit &&
@@ -1704,13 +1956,13 @@ async function validateRecord(
       record.resolution =
         "TP and SL touched in the same 1m candle; intrabar order is unknown.";
 
-      return true;
+      changed =
+        true;
+
+      break;
     }
 
-
-    if (
-      tpHit
-    ) {
+    if (tpHit) {
       record.status =
         "CLOSED";
 
@@ -1728,13 +1980,13 @@ async function validateRecord(
       record.resolution =
         "TP hit before SL";
 
-      return true;
+      changed =
+        true;
+
+      break;
     }
 
-
-    if (
-      slHit
-    ) {
+    if (slHit) {
       record.status =
         "CLOSED";
 
@@ -1752,37 +2004,44 @@ async function validateRecord(
       record.resolution =
         "SL hit before TP";
 
-      return true;
+      changed =
+        true;
+
+      break;
     }
   }
 
+  if (changed) {
+    await env.SIGNAL_TEST.put(
+      record.testId,
+      JSON.stringify(record)
+    );
+  }
 
-  return false;
+  return changed;
 }
 
-
 async function validatePending(
-  state,
+  env,
   maxCount = 20
 ) {
-  let changed =
-    false;
+  const records =
+    await listTests(env);
 
-  let checked =
-    0;
+  let checked = 0;
+  let changed = 0;
 
-
-  for (
-    const record of
-    state.records
-  ) {
+  for (const record of records) {
     if (
-      record.status !==
-      "PENDING"
+      ![
+        "ARMED",
+        "PENDING"
+      ].includes(
+        record.status
+      )
     ) {
       continue;
     }
-
 
     if (
       checked >=
@@ -1791,88 +2050,72 @@ async function validatePending(
       break;
     }
 
-
     checked++;
-
 
     try {
       if (
         await validateRecord(
+          env,
           record
         )
       ) {
-        changed =
-          true;
+        changed++;
       }
     }
 
-    catch (error) {
-      /*
-        Temporary Binance failure:
-        leave the record pending.
-      */
+    catch (_) {
+      // Temporary Binance failure:
+      // keep the test unchanged.
     }
   }
 
-
   return {
-    changed,
-    checked
+    checked,
+    changed
   };
 }
 
-
-// ======================================================
-// REPORT
-// ======================================================
-
-function reportFromState(
-  state
-) {
-  const records =
-    state.records;
-
-
+function buildReport(records) {
   const wins =
     records.filter(
-      r =>
-        r.result ===
+      record =>
+        record.result ===
         "WIN"
     );
 
-
   const losses =
     records.filter(
-      r =>
-        r.result ===
+      record =>
+        record.result ===
         "LOSS"
     );
 
+  const armed =
+    records.filter(
+      record =>
+        record.status ===
+        "ARMED"
+    );
 
   const pending =
     records.filter(
-      r =>
-        r.status ===
+      record =>
+        record.status ===
         "PENDING"
     );
 
-
   const ambiguous =
     records.filter(
-      r =>
-        r.result ===
+      record =>
+        record.result ===
         "AMBIGUOUS"
     );
-
 
   const completed =
     wins.length +
     losses.length;
 
-
-  function performance(
-    side
-  ) {
+  function performance(side) {
     const closed =
       records.filter(
         record =>
@@ -1888,14 +2131,12 @@ function reportFromState(
           )
       );
 
-
     const sideWins =
       closed.filter(
         record =>
           record.result ===
           "WIN"
       ).length;
-
 
     return {
       completed:
@@ -1920,12 +2161,11 @@ function reportFromState(
     };
   }
 
-
   return {
     ok: true,
 
     engine:
-      "Binance Signal Engine V7 Auto Test",
+      "Binance Signal Engine V8 Auto Test",
 
     target:
       TEST_TARGET,
@@ -1936,7 +2176,6 @@ function reportFromState(
     remaining:
       Math.max(
         0,
-
         TEST_TARGET -
         records.length
       ),
@@ -1944,6 +2183,9 @@ function reportFromState(
     collectionComplete:
       records.length >=
       TEST_TARGET,
+
+    armed:
+      armed.length,
 
     pending:
       pending.length,
@@ -1974,9 +2216,9 @@ function reportFromState(
         ? round(
             avg(
               records.map(
-                r =>
+                record =>
                   Number(
-                    r.strength
+                    record.strength
                   ) || 0
               )
             ),
@@ -1998,60 +2240,66 @@ function reportFromState(
   };
 }
 
+async function getTestReport(env) {
+  return buildReport(
+    await listTests(env)
+  );
+}
 
-// ======================================================
-// ONE COMPLETE BACKGROUND CYCLE
-// ======================================================
+async function resetTests(env) {
+  if (!env?.SIGNAL_TEST) {
+    throw new Error(
+      "SIGNAL_TEST KV binding not found"
+    );
+  }
 
-async function runCycle(
-  env
-) {
-  const state =
-    await loadState(env);
+  const records =
+    await listTests(env);
 
+  for (const record of records) {
+    await env.SIGNAL_TEST.delete(
+      record.testId
+    );
+  }
 
+  return {
+    ok: true,
+
+    deleted:
+      records.length,
+
+    message:
+      "V8 test history reset"
+  };
+}
+
+async function runCycle(env) {
   /*
-    Validate only 6 pending entries during the
-    automatic cycle.
-
-    Worst case:
-      20 kline requests
-      + max 20 candidate microstructure requests
-      + 6 validation requests
-      = 46 external requests
-
-    This stays below Workers Free 50/request.
+    Worst case external requests:
+    Base scan = 20
+    Microstructure max = 20
+    Validation max = 4
+    Total = 44
   */
 
-  const validation =
-    await validatePending(
-      state,
-      MAX_AUTO_VALIDATIONS_PER_CYCLE
-    );
-
+  await validatePending(
+    env,
+    MAX_AUTO_VALIDATIONS_PER_CYCLE
+  );
 
   const market =
     await scan();
 
-
-  const added =
-    addSignalsToState(
-      state,
-      market.signals ||
-        []
-    );
-
-
-  if (
-    validation.changed ||
-    added > 0
-  ) {
-    await saveState(
+  const storage =
+    await saveSignalsForTest(
       env,
-      state
+      market.signals || []
     );
-  }
 
+  const report =
+    await getTestReport(
+      env
+    );
 
   return {
     ...market,
@@ -2060,24 +2308,12 @@ async function runCycle(
       target:
         TEST_TARGET,
 
-      addedNow:
-        added,
+      storage,
 
-      validatedNow:
-        validation.checked,
-
-      report:
-        reportFromState(
-          state
-        )
+      report
     }
   };
 }
-
-
-// ======================================================
-// WORKER
-// ======================================================
 
 export default {
 
@@ -2098,20 +2334,17 @@ export default {
       );
     }
 
-
     try {
       const url =
         new URL(
           request.url
         );
 
-
       const path =
         url.pathname.replace(
           /\/+$/,
           ""
         ) || "/";
-
 
       if (
         path === "/"
@@ -2120,7 +2353,7 @@ export default {
           ok: true,
 
           engine:
-            "Binance Signal Engine V7",
+            "Binance Signal Engine V8",
 
           endpoints: [
             "/health",
@@ -2135,7 +2368,6 @@ export default {
         });
       }
 
-
       if (
         path ===
         "/health"
@@ -2145,12 +2377,11 @@ export default {
             "/api/v3/time"
           );
 
-
         return json({
           ok: true,
 
           engine:
-            "Binance Signal Engine V7",
+            "Binance Signal Engine V8",
 
           binance:
             "CONNECTED",
@@ -2168,7 +2399,6 @@ export default {
         });
       }
 
-
       if (
         path ===
         "/pairs"
@@ -2184,22 +2414,20 @@ export default {
         });
       }
 
-
       if (
         path ===
         "/signal"
       ) {
         const symbol =
-          url.searchParams
-            .get("symbol") ||
+          url.searchParams.get(
+            "symbol"
+          ) ||
           "BTCUSDT";
-
 
         const result =
           await analyze(
             symbol
           );
-
 
         return json(
           result,
@@ -2209,12 +2437,6 @@ export default {
         );
       }
 
-
-      /*
-        Read-only market scan.
-        Does NOT write test records.
-      */
-
       if (
         path ===
         "/scan"
@@ -2223,12 +2445,6 @@ export default {
           await scan()
         );
       }
-
-
-      /*
-        Full auto-test cycle:
-        validate + scan + save.
-      */
 
       if (
         path ===
@@ -2241,84 +2457,43 @@ export default {
         );
       }
 
-
       if (
         path ===
         "/test/results"
       ) {
-        const state =
-          await loadState(
-            env
-          );
-
         return json(
-          reportFromState(
-            state
+          await getTestReport(
+            env
           )
         );
       }
-
 
       if (
         path ===
         "/test/check"
       ) {
-        const state =
-          await loadState(
-            env
-          );
-
-
-        const validation =
-          await validatePending(
-            state,
-            20
-          );
-
-
-        if (
-          validation.changed
-        ) {
-          await saveState(
-            env,
-            state
-          );
-        }
-
+        await validatePending(
+          env,
+          20
+        );
 
         return json(
-          reportFromState(
-            state
+          await getTestReport(
+            env
           )
         );
       }
-
 
       if (
         path ===
         "/test/reset"
       ) {
-        const state =
-          emptyState();
-
-
-        await saveState(
-          env,
-          state
+        return json(
+          await resetTests(
+            env
+          )
         );
-
-
-        return json({
-          ok: true,
-
-          message:
-            "V7 test state reset",
-
-          target:
-            TEST_TARGET
-        });
       }
-
 
       return json(
         {
@@ -2347,11 +2522,6 @@ export default {
     }
   },
 
-
-  /*
-    Works after a Cloudflare Cron Trigger is attached.
-  */
-
   async scheduled(
     event,
     env,
@@ -2362,21 +2532,38 @@ export default {
 
         .then(result => {
           console.log(
-            "V7 cycle",
+            "V8 cycle",
+
             JSON.stringify({
               signalsFound:
                 result.signalsFound,
 
-              test:
+              collected:
                 result.autoTest
                   ?.report
+                  ?.collected,
+
+              completed:
+                result.autoTest
+                  ?.report
+                  ?.completed,
+
+              wins:
+                result.autoTest
+                  ?.report
+                  ?.wins,
+
+              losses:
+                result.autoTest
+                  ?.report
+                  ?.losses
             })
           );
         })
 
         .catch(error => {
           console.error(
-            "V7 scheduled cycle failed",
+            "V8 scheduled cycle failed",
             error
           );
         })
