@@ -1,7 +1,7 @@
 // Binance Signal Engine V8
 // Strict multi-timeframe signal engine + clean 20-signal auto test
 
-const API = "https://data-api.binance.vision";
+const API = "https://api-gcp.binance.com";
 
 const PAIRS = [
   "BTCUSDT","ETHUSDT","BNBUSDT","SOLUSDT","XRPUSDT",
